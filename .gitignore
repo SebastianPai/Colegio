@@ -1,0 +1,31 @@
+# Secretos — NUNCA versionar (Fase 4.1: token de servicio SAPRED,
+# secreto de firma de sesiones, certificados TLS locales).
+backend/certs/
+
+# Base de datos y sus respaldos (datos reales de estudiantes/docentes).
+backend/colegio.db
+backend/colegio.db-wal
+backend/colegio.db-shm
+backend/colegio.db.bak_*
+
+# Entornos y dependencias instaladas.
+backend/venv/
+**/__pycache__/
+*.pyc
+herramientas/importar_sapred/node_modules/
+
+# Archivos generados (subidas, boletines armados, logs).
+backend/uploads/
+backend/boletines_sedes/
+herramientas/importar_sapred/logs/
+herramientas/importar_sapred/salida_prueba.txt
+*.log
+
+# Volcados de datos con información personal real, o reportes ya generados
+# (no son código: son salidas de un import/reporte, se regeneran solos).
+backend/docentes_extraidos.json
+backend/continuidad_final.json
+backend/muestras/
+
+# Estado interno de la herramienta (Claude Code), no del proyecto.
+.claude/

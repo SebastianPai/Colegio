@@ -1,0 +1,9 @@
+{
+  "name": "importar-sapred-ietaba",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Importa notas faltantes desde SAPRED hacia la app IETABA",
+  "dependencies": {
+    "playwright": "^1.62.1"
+  }
+}

@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>IETABA</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <!-- Fase 4.0: estilos de las pantallas de autenticación. No se tocó
+       style.css (fuera del alcance permitido para esta fase); se reutilizan
+       las variables y clases (.form-grid, .boton, .alerta-caja) que ya
+       existen ahí. -->
+  <style>
+    .pantalla-auth {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--fondo);
+      z-index: 1000;
+      padding: 16px;
+    }
+    .pantalla-auth[hidden] { display: none; }
+    .app-shell[hidden] { display: none; }
+    .pantalla-auth-caja {
+      background: white;
+      border: 1px solid var(--borde);
+      border-radius: 10px;
+      padding: 28px 24px;
+      width: 100%;
+      max-width: 360px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .pantalla-auth-caja .marca { justify-content: center; margin-bottom: 4px; }
+    .pantalla-auth-caja .form-grid { grid-template-columns: 1fr; max-width: none; }
+    .pantalla-auth-caja p { margin: 0; font-size: 14px; color: var(--texto); }
+    .cuenta-usuario {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: 8px 12px;
+      font-size: 12.5px;
+      color: var(--gris);
+    }
+    .cuenta-usuario strong { color: var(--texto); font-size: 13px; }
+    /* .boton-texto-chico trae "margin: 6px auto 0" (para centrarse en su uso
+       original); aquí se resetea para que quede alineado a la izquierda. */
+    .cuenta-usuario .boton-texto-chico { margin: 2px 0 0; }
+  </style>
+</head>
+<body>
+  <!-- Fase 4.0: pantallas de autenticación. Viven fuera de .app-shell, que
+       arranca oculto (atributo hidden) y solo se revela cuando auth.js
+       confirma la sesión — ver frontend/static/js/auth.js. -->
+  <div id="pantalla-carga" class="pantalla-auth">
+    <p>Cargando…</p>
+  </div>
+
+  <div id="pantalla-sin-conexion" class="pantalla-auth" hidden>
+    <div class="pantalla-auth-caja">
+      <p>No se pudo conectar con el servidor.</p>
+      <button type="button" class="boton" id="btn-reintentar-conexion">Reintentar</button>
+    </div>
+  </div>
+
+  <div id="pantalla-login" class="pantalla-auth" hidden>
+    <div class="pantalla-auth-caja">
+      <div class="marca">
+        <img src="/static/logos/logo2.jpeg" alt="IETABA" class="marca-logo" />
+        <strong>IETABA</strong>
+      </div>
+      <form id="form-login" class="form-grid">
+        <div id="login-aviso-sesion" class="alerta-caja" hidden>Tu sesión expiró. Vuelve a iniciar sesión.</div>
+        <div id="login-error" class="alerta-caja" hidden></div>
+        <label>Usuario o documento
+          <input type="text" name="usuario" autocomplete="username" required />
+        </label>
+        <label>Contraseña
+          <input type="password" name="clave" autocomplete="current-password" required />
+        </label>
+        <label class="check-linea">
+          <input type="checkbox" name="confiar_en_dispositivo" /> Confiar en este equipo
+        </label>
+        <button type="submit" class="boton">Entrar</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="pantalla-cambiar-clave" class="pantalla-auth" hidden>
+    <div class="pantalla-auth-caja">
+      <p>Debes cambiar tu contraseña antes de continuar.</p>
+      <form id="form-cambiar-clave" class="form-grid">
+        <div id="cambiar-clave-error" class="alerta-caja" hidden></div>
+        <label>Contraseña actual
+          <input type="password" name="clave_actual" autocomplete="current-password" required />
+        </label>
+        <label>Contraseña nueva
+          <input type="password" name="clave_nueva" autocomplete="new-password" required />
+        </label>
+        <label>Repite la contraseña nueva
+          <input type="password" name="clave_nueva_repetir" autocomplete="new-password" required />
+        </label>
+        <button type="submit" class="boton">Cambiar contraseña</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="app-shell" hidden>
+    <header class="topbar-movil no-imprimir">
+      <button type="button" id="btn-abrir-sidebar" class="topbar-movil-toggle" aria-label="Abrir menú" aria-expanded="false" aria-controls="sidebar">
+        <span aria-hidden="true">☰</span>
+      </button>
+      <div class="marca marca-movil">
+        <img src="/static/logos/logo2.jpeg" alt="" class="marca-logo" />
+        <strong>IETABA</strong>
+      </div>
+    </header>
+
+    <div id="sidebar-overlay" class="sidebar-overlay no-imprimir" hidden></div>
+
+    <aside class="sidebar no-imprimir" id="sidebar">
+      <div class="sidebar-marca">
+        <img src="/static/logos/logo2.jpeg" alt="IETABA" class="marca-logo" />
+        <div class="marca-texto">
+          <strong>IETABA</strong>
+          <span>Institución Educativa Indígena Técnica Agroambiental</span>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav" aria-label="Navegación principal">
+        <div class="nav-grupo">
+          <span class="nav-grupo-titulo">Estudiantes</span>
+          <button data-vista="estudiantes" class="tab" data-permiso="estudiantes.ver">Listado</button>
+          <button data-vista="agregar" class="tab" data-permiso="estudiantes.crear">Matrícula</button>
+          <button type="button" class="tab-proximamente" disabled title="Próximamente disponible">
+            Historial <span class="etiqueta-proximamente">Pronto</span>
+          </button>
+        </div>
+        <div class="nav-grupo">
+          <span class="nav-grupo-titulo">Gestión</span>
+          <button data-vista="sedes" class="tab activo" data-permiso="sedes.ver">Sedes</button>
+          <button data-vista="horario" class="tab" data-permiso="horario.ver">Horarios</button>
+          <button data-vista="boletines" class="tab" data-permiso="boletines.ver">Boletines</button>
+          <button data-vista="notas" class="tab" data-permiso="boletines.ver">Notas</button>
+          <button data-vista="constancias" class="tab" data-permiso="constancias.ver">Constancias</button>
+          <button data-vista="reportes" class="tab" data-permiso="reportes.ver">Reportes</button>
+        </div>
+      </nav>
+
+      <div class="sidebar-pie">
+        <button type="button" class="tab-proximamente" disabled title="Próximamente disponible">
+          Configuración <span class="etiqueta-proximamente">Pronto</span>
+        </button>
+        <div class="cuenta-usuario">
+          <strong id="cuenta-usuario-nombre"></strong>
+          <span id="cuenta-usuario-rol"></span>
+          <button type="button" id="btn-logout" class="boton-texto-chico">Cerrar sesión</button>
+        </div>
+        <button type="button" id="btn-colapsar-sidebar" class="sidebar-colapsar-btn" aria-label="Colapsar menú" aria-expanded="true" title="Colapsar menú">
+          <span aria-hidden="true">«</span> <span class="sidebar-colapsar-texto">Colapsar</span>
+        </button>
+      </div>
+    </aside>
+
+    <main id="app" class="contenido"></main>
+  </div>
+
+  <!-- ?v=f40 en los 4 archivos que cambió Fase 4.0: evita que un navegador
+       que ya había cargado la app antes siga usando su copia en caché de
+       main.js (el viejo, que llamaba render() directo) contra el
+       index.html nuevo (donde .app-shell arranca oculto) — esa combinación
+       deja la pantalla de "Cargando…" fija para siempre. -->
+  <script src="/static/js/comun.js?v=f40"></script>
+  <script src="/static/js/auth.js?v=f40"></script>
+  <script src="/static/js/core.js?v=f40"></script>
+  <script src="/static/js/sedes.js"></script>
+  <script src="/static/js/reportes.js"></script>
+  <script src="/static/js/estudiantes.js"></script>
+  <script src="/static/js/agregar.js"></script>
+  <script src="/static/js/constancias.js"></script>
+  <script src="/static/js/boletines.js"></script>
+  <script src="/static/js/horario.js"></script>
+  <script src="/static/js/scanner.js"></script>
+  <script src="/static/js/ficha.js"></script>
+  <script src="/static/js/main.js?v=f40"></script>
+</body>
+</html>

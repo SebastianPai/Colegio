@@ -1,0 +1,184 @@
+IMPORTAR NOTAS DESDE SAPRED
+============================
+
+CAMINO RECOMENDADO (usa esto normalmente)
+------------------------------------------
+Ya no hace falta esta carpeta para el día a día. Desde la app:
+
+    Boletines -> botón "🔍 Auditoría SAPRED"
+
+Ahí eliges período, grado y sedes, le das "Iniciar auditoría", entras con tu
+usuario y contraseña en la ventana de Chrome que se abre (eso nunca se
+automatiza, por seguridad) y el resto corre solo — con barra de progreso,
+historial de auditorías anteriores, y la tabla de pendientes con exportar
+a Excel.
+
+ESTA CARPETA (Importar_SAPRED.bat) — respaldo manual
+------------------------------------------------------
+Se deja funcionando por si alguna vez no se puede usar la app (por ejemplo,
+mientras se prueba un cambio nuevo). Hace lo mismo por consola, sin
+interfaz. Instrucciones:
+
+1. Asegúrate de que el servidor de la app esté prendido.
+2. Doble clic en "Importar_SAPRED.bat".
+3. Entra en la ventana de Chrome con tu usuario y contraseña.
+4. Responde las preguntas de período y grado en la consola.
+5. Espera el resumen final.
+
+Notas:
+- Es seguro correr cualquiera de los dos caminos varias veces — no
+  duplican lo que ya estaba cargado.
+- config_sedes.json sigue siendo la lista de sedes que usan ambos caminos
+  (la app y esta consola comparten el mismo archivo).
+- Si "SAPRED" cambia algún nombre de sede, se corrige ahí mismo.
+
+TOKEN DE SERVICIO (Fase 4.1) — no hace falta hacer nada para usarlo
+---------------------------------------------------------------------
+Estos scripts llaman a unos pocos endpoints internos de la app (progreso de
+la auditoría, unir/separar PDF, importar por bloques, el conteo de
+estudiantes por sede) que exigen una identidad de servicio, distinta de tu
+usuario y contraseña de la app. Funciona sola:
+
+- Si la app te lanzó el script (Auditoría SAPRED, Generar boletines): el
+  backend ya le pasó el token por variable de entorno. No ves nada distinto.
+- Si corres un script a mano (Importar_SAPRED.bat, capturar_boletin_manual.js,
+  capturar_boletines_pdf_manual.js): lee el token directo del archivo
+  backend/certs/token_servicio_sapred.key (se genera solo la primera vez que
+  arranca el backend). Con que el servidor de la app haya arrancado al menos
+  una vez en esta máquina, ese archivo ya existe.
+
+Si ves errores "403 Acceso restringido" al llamar alguno de esos endpoints:
+  1. Confirma que estás corriendo el script EN la misma máquina donde vive
+     el backend (esos endpoints rechazan cualquier origen que no sea
+     127.0.0.1/::1 — es a propósito, ver el diseño de Fase 4.1).
+  2. Confirma que backend/certs/token_servicio_sapred.key existe y que el
+     backend no se reinició después de borrarlo/cambiarlo sin que los
+     scripts recojan el valor nuevo (los scripts sí lo recogen solos en su
+     próxima corrida; el backend necesita reiniciarse para tomar un token
+     rotado).
+
+Rotar el token (por ejemplo, si se sospecha que se filtró): borra
+backend/certs/token_servicio_sapred.key y reinicia el backend — genera uno
+nuevo solo, el viejo deja de servir de inmediato, y estos scripts toman el
+valor nuevo automáticamente en su siguiente corrida (no hay nada que
+copiar/pegar a mano).
+
+Importante: este token protege contra llamadas desde la red del colegio (el
+servidor escucha en todas las interfaces) y contra quien no lo conozca — NO
+protege contra alguien que ya tiene acceso a los archivos de esta máquina
+(quien puede leer ese archivo también podría leer la base de datos
+directamente). No es un secreto para compartir ni para pegar en un chat.
+
+
+BOLETÍN INFORMATIVO (conceptos, observaciones, profesor por materia)
+-------------------------------------------------------------------
+Es un segundo reporte, aparte de las notas. En la app:
+
+    Boletines -> SAPRED -> Importar -> "Qué importar: Conceptos y
+    observaciones (Boletín informativo)"
+
+o, sin navegador, subiendo el PDF en esa misma pantalla ("Importación
+manual — Boletín informativo"). El PDF hay que sacarlo de:
+
+    Reportes -> Reportes y Resultados Académicos -> Boletín informativo
+    (sede, grado, curso, TODAS LAS SECCIONES, período) -> Generar -> PDF
+
+Automatización con navegador (auditoría tipo "boletin"): el menú de SAPRED ya
+se descubrió (con "node descubrir_boletin.js"):
+
+    addTab('Boletin Informativo','reportes/boletin/sel.php','','186')
+
+Ya está puesto en sapred_core.js (BOLETIN_RUTA / BOLETIN_ID). Es una página
+"sel.php" (formulario aparte), sin jornada, con salida HTML/PDF y dos
+checkboxes "NO incluir..." (conceptos / faltas — hay que dejarlos SIN
+marcar). generarYExtraerBoletin() ya pide: todas las secciones, el período,
+salida HTML y con concepto y faltas incluidos.
+
+CONFIRMADO contra la página real (node descubrir_boletin.js, agosto 2026):
+todos los campos (#id_sed, #cod_gra, #cod_cur, #id_peri, #gen_reporte,
+est_alu) coinciden exactamente con lo que el código ya asumía — no quedó
+nada pendiente de la automatización del Boletín. Se encontró y corrigió un
+bug real: el código marcaba "imp_concepto", que en la página real es un
+checkbox de "NO incluir conceptos" (justo lo contrario de lo que se quería).
+La importación por PDF nunca dependió de nada de esto y siempre funcionó.
+
+Para afinar el lector contra un PDF real:
+    backend/venv/Scripts/python.exe probar_boletin.py ruta/al/boletin.pdf
+    backend/venv/Scripts/python.exe probar_boletin.py ruta/al/boletin.pdf --importar
+
+AUTOMATIZACIÓN COMPLETA — YA FUNCIONA (arreglada, agosto/2026)
+-------------------------------------------------------------------------
+El "0 bloques" que salía al principio NO era porque SAPRED bloqueara el
+reporte: eran dos bugs propios de este código, ya corregidos:
+
+  1. extraer_bloques_boletin.js no entendía el HTML real del reporte (las
+     celdas de la fila del estudiante vienen separadas por TAB, no en
+     líneas sueltas como en el PDF) — arreglado, ya reconoce ambas formas.
+  2. sapred_core.js (_elegirOpcionQueContenga) se quedaba trabado en el
+     combo de "Curso": la regex que buscaba "[TODOS LAS SECCIONES]"
+     también hacía match con el propio placeholder "[ESCOJA UNA SECCIÓN]"
+     (contiene la palabra "SECCIÓN"), así que "elegía" el placeholder y la
+     cascada de campos siguientes (período, botón de generar) nunca
+     aparecía. Arreglado: ahora esa búsqueda siempre descarta la opción
+     [0] (el placeholder).
+
+Confirmado con node probar_boletin_en_vivo.js: el reporte se genera
+completo y automático, con notas/conceptos/observaciones reales. Queda un
+error interno de SAPRED (su mostrar() revienta con un campo que no se usa,
+"filDef3") pero es inofensivo, no impide nada.
+
+Desde la app, Boletines -> "🔍 Auditoría SAPRED" -> "Conceptos y
+observaciones (Boletín informativo)" ya funciona 100% automático, igual
+que Notas — se elige sede/grado/período y corre solo.
+
+GENERAR BOLETINES POR SEDE (PDF de calificaciones para el docente)
+-------------------------------------------------------------------------
+OTRO reporte, aparte de todo lo anterior: el boletín de CALIFICACIONES que
+se entrega (portada "INFORME ESCOLAR DE VALORACIÓN", "Opciones de impresión"
+con "Mostrar Sede" / "Incluir Puesto"). No importa nada — solo genera un PDF
+por sede con el boletín de todos sus grados, ordenado por grado.
+
+Desde la app:  Boletines -> SAPRED -> "Generar boletines por sede".
+Los PDF quedan en  backend/boletines_sedes/<año>-P<n>/  y se descargan ahí
+mismo.  Script: generar_boletines_headless.js  (lo lanza el backend con
+tipo='boletin_pdf').
+
+DESCUBIERTO (node descubrir_boletin_general.js + aclaración del usuario, sep-2026):
+- NO hay un menú de boletín aparte. El boletín de calificaciones es el MISMO
+  reportes/boletin/sel.php (id 186) que el "Boletin Informativo".
+- FLUJO: es IGUAL a generarYExtraerBoletin (mismo formulario). Lo ÚNICO
+  distinto: antes de darle "Generar" se pulsa el botón "Opciones de
+  impresión" DEL PROPIO FORMULARIO, se dejan Mostrar Sede / Incluir Puesto
+  en Sí, se Guarda (cierra el modal) y recién ahí se Genera. Para el archivo:
+  salida PDF (#des2) en vez de HTML (#des1).
+- El modal de opciones es un iframe (showPopWin -> #popupContainer) que carga
+  config/index.php?tipo=b. Radios: sede_cur / inc_puesto (value "s"/"n"),
+  guardar id/name "btn". En IETABA ya están los dos en "s".
+
+Estado corrida #70 (P2, 19 sedes): login OK, opciones OK, pero se cerró
+Chrome. Ya reescrito el flujo. PENDIENTE una corrida real para ver (a) que
+el botón/iframe de opciones se encuentran, (b) cómo entrega SAPRED el PDF al
+pulsar #gen_reporte con #des2 (descarga / popup / visor). generarBoletinPdfSede()
+contempla las tres.
+
+
+CAPTURA MANUAL (respaldo, por si algo de esto se vuelve a romper)
+-------------------------------------------------------------------------
+Si alguna vez la automatización vuelve a fallar, existe un camino alterno
+que no depende para nada de llenar el formulario a mano por código:
+
+    node capturar_boletin_manual.js
+
+Abre Chrome, inicias sesión, y entras tú mismo a Boletín informativo
+como siempre (sede, grado, curso, período, "Generar") — el script no
+toca ningún <select> ni botón. En cuanto aparece el reporte en pantalla
+(ventana emergente o mismo marco) lo detecta, lo lee y lo importa solo a
+la app. Repite "Generar" para cada curso que quieras traer y cierra
+Chrome al final para ver el resumen. Como el importador ya no depende de
+sede_id (se reconoce por el nombre de sede que trae el propio reporte,
+igual que la importación por PDF), no hace falta decirle nada más.
+
+Este mismo camino también está listo para usarse desde la app
+(capturar_boletin_headless.js) si algún día hace falta volver a él — solo
+habría que cambiar SCRIPT_HEADLESS_BOLETIN en
+backend/app/sapred_auditoria.py.

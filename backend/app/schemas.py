@@ -1033,6 +1033,23 @@ class DocenteLibre(BaseModel):
     niveles: list[str] = []  # "primaria" / "secundaria" (según sus clases)
 
 
+class HorasLibresDocente(BaseModel):
+    docente_id: int
+    nombre_completo: str
+    # "dia-hora" -> "6-2 COE" (lo que dicta); si la clave no está, esa franja está libre
+    celdas: dict[str, str] = {}
+    libres_por_dia: dict[int, int] = {}
+    niveles: list[str] = []  # "primaria" / "secundaria" (según los grados que dicta)
+    total_libres: int = 0
+    total_clases: int = 0
+
+
+class HorasLibresReporte(BaseModel):
+    anio_lectivo: int
+    franjas: list[dict] = []
+    docentes: list[HorasLibresDocente] = []
+
+
 class EstadoDocente(BaseModel):
     docente_id: int
     nombre_completo: str

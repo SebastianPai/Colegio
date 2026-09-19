@@ -46,10 +46,44 @@ async function renderReportes() {
 
 let listaCupoSede = ""; // "" = todas las sedes IETABA
 let listaCupoCantidad = 200;
+let listaCupoSinLimite = false; // true = todos los que cumplan, sin cupo
 let listaCupoDesdeGrado = 0;
+let listaCupoHastaGrado = 11;
+let listaCupoGrupos = new Set(); // "grado:curso" escogidos a mano; vacío = todo el rango
+let listaCupoIncluir = { posibles: false, retirados: false, sinGrupo: false };
 let listaCupoVista = "activos"; // activos | posibles | retirados
 let listaCupoSeleccion = new Set();
 let listaCupoSedeInicializada = false;
+
+const claveGrupoLista = (e) => `${e.grado}:${e.curso ?? ""}`;
+
+// "4:2" -> "4-2" (y al revés), para poder escribir los grupos a mano.
+const claveATextoGrupo = (clave) => clave.replace(":", "-").replace(/-$/, "-sg");
+
+// Lee "4-2, 3-2, 5" y devuelve las claves que existan en la sede; "5" solo
+// (sin guion) significa todos los grupos de ese grado.
+function clavesDesdeTexto(texto, clavesExistentes) {
+  const claves = new Set();
+  const desconocidos = [];
+  texto
+    .split(/[,;]+|\s+/)
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean)
+    .forEach((token) => {
+      const [g, c] = token.split("-");
+      const grado = Number(g);
+      if (!Number.isInteger(grado)) return desconocidos.push(token);
+      if (c === undefined) {
+        const delGrado = [...clavesExistentes].filter((k) => Number(k.split(":")[0]) === grado);
+        if (!delGrado.length) return desconocidos.push(token);
+        return delGrado.forEach((k) => claves.add(k));
+      }
+      const clave = `${grado}:${c === "sg" ? "" : Number(c)}`;
+      if (!clavesExistentes.has(clave)) return desconocidos.push(token);
+      claves.add(clave);
+    });
+  return { claves, desconocidos };
+}
 
 const VISTAS_LISTA_CUPO = [
   { id: "activos", label: "Activos" },
@@ -80,6 +114,7 @@ const COLUMNAS_LISTA_CUPO = [
   { id: "grupo", label: "Grado / Grupo", valor: (e) => e.grupo },
   { id: "sede", label: "Sede", valor: (e) => (e.sede ? e.sede.nombre : "") },
   { id: "estado", label: "Estado", valor: (e) => e.estado || "" },
+  { id: "marca", label: "Marca", valor: (e) => (e.retirado ? "Retirado" : e.posible_retirado ? "Posible retiro" : "") },
   { id: "observaciones", label: "Observaciones", valor: (e) => e.observaciones || "" },
   { id: "firma", label: "Firma (en blanco)", valor: () => "" },
 ];
@@ -139,12 +174,10 @@ async function cargarYPintarListaCupo(contenedor, sedes) {
   // grupos (Sede #01): en las rurales nadie tiene grupo y van por grado.
   const sedesConGrupos = new Set(estudiantes.filter((e) => e.curso != null).map((e) => e.sede_id));
   const sinGrupo = (e) => e.curso == null && sedesConGrupos.has(e.sede_id);
-  conteos.sinGrupo = [];
-  if (listaCupoVista === "activos") {
-    estudiantes = estudiantes.filter((e) => !e.posible_retirado && !e.retirado);
-    conteos.sinGrupo = estudiantes.filter(sinGrupo);
-    estudiantes = estudiantes.filter((e) => !sinGrupo(e));
-  }
+  conteos.sinGrupoIds = new Set(estudiantes.filter(sinGrupo).map((e) => e.id));
+  // En la vista de activos NO se filtra aquí: los filtros (rango de grados,
+  // grupos escogidos, incluir marcados) se aplican al pintar, para poder
+  // cambiarlos sin volver a pedir los datos al servidor.
   if (listaCupoVista === "posibles") estudiantes = estudiantes.filter(esPosible);
   if (listaCupoVista === "retirados") estudiantes = estudiantes.filter((e) => e.retirado);
   pintarListaCupo(contenedor, sedes, estudiantes, conteos);
@@ -153,23 +186,59 @@ async function cargarYPintarListaCupo(contenedor, sedes) {
 function pintarListaCupo(contenedor, sedes, estudiantes, conteos) {
   // El backend ya los entrega en orden grado → curso → apellido → nombre.
   const esActivos = listaCupoVista === "activos";
-  const candidatos = esActivos ? estudiantes.filter((e) => e.grado >= listaCupoDesdeGrado) : estudiantes;
-  const lista = esActivos ? candidatos.slice(0, Math.max(listaCupoCantidad, 0)) : candidatos;
+  const sinGrupoIds = conteos.sinGrupoIds || new Set();
+  // Grupos que existen en la sede (para escoger 4-2, 6-4, etc.).
+  const gruposDisponibles = [];
+  const porClave = new Map();
+  estudiantes.forEach((e) => {
+    const clave = claveGrupoLista(e);
+    if (!porClave.has(clave)) {
+      porClave.set(clave, { clave, grado: e.grado, etiqueta: e.grupo, total: 0 });
+      gruposDisponibles.push(porClave.get(clave));
+    }
+    porClave.get(clave).total += 1;
+  });
+  // Si cambió la sede, se descartan los grupos escogidos que ya no existen.
+  if (listaCupoGrupos.size) {
+    listaCupoGrupos = new Set([...listaCupoGrupos].filter((c) => porClave.has(c)));
+  }
+  const enRango = (e) =>
+    listaCupoGrupos.size
+      ? listaCupoGrupos.has(claveGrupoLista(e))
+      : e.grado >= listaCupoDesdeGrado && e.grado <= listaCupoHastaGrado;
+  const candidatos = esActivos
+    ? estudiantes.filter((e) => {
+        if (!listaCupoIncluir.posibles && e.posible_retirado && !e.retirado) return false;
+        if (!listaCupoIncluir.retirados && e.retirado) return false;
+        if (!listaCupoIncluir.sinGrupo && sinGrupoIds.has(e.id)) return false;
+        return enRango(e);
+      })
+    : estudiantes;
+  const lista =
+    esActivos && !listaCupoSinLimite ? candidatos.slice(0, Math.max(listaCupoCantidad, 0)) : candidatos;
   // Sin grupo que quedaron fuera DENTRO del rango de grados de la lista.
   const gradoFinal = lista.length ? lista[lista.length - 1].grado : -1;
-  const sinGrupoEnRango = (conteos.sinGrupo || []).filter(
-    (e) => e.grado >= listaCupoDesdeGrado && e.grado <= gradoFinal
-  ).length;
+  const sinGrupoEnRango =
+    esActivos && !listaCupoIncluir.sinGrupo
+      ? estudiantes.filter((e) => sinGrupoIds.has(e.id) && enRango(e) && e.grado <= gradoFinal).length
+      : 0;
+  const gruposEscogidosTxt = [...listaCupoGrupos]
+    .map((c) => porClave.get(c) && porClave.get(c).etiqueta)
+    .filter(Boolean)
+    .join(", ");
   const idsVisibles = new Set(lista.map((e) => e.id));
   listaCupoSeleccion = new Set([...listaCupoSeleccion].filter((id) => idsVisibles.has(id)));
 
   // Dónde se cortó la lista y cuántos de ese mismo grupo quedaron por fuera.
   let notaCorte = "";
   if (esActivos) {
+    const alcance = listaCupoGrupos.size
+      ? `los grupos escogidos (${gruposEscogidosTxt})`
+      : `${nombreGradoLista(listaCupoDesdeGrado)} a ${nombreGradoLista(listaCupoHastaGrado)}`;
     if (!lista.length) {
-      notaCorte = "No hay estudiantes activos para estos filtros.";
+      notaCorte = "No hay estudiantes para estos filtros.";
     } else if (candidatos.length <= lista.length) {
-      notaCorte = `Alcanzan todos: ${lista.length} estudiante(s) desde ${nombreGradoLista(listaCupoDesdeGrado)} hasta ${lista[lista.length - 1].grupo}.`;
+      notaCorte = `${lista.length} estudiante(s) en ${alcance}${listaCupoSinLimite ? "" : " (alcanzan todos, el cupo no cortó la lista)"}.`;
     } else {
       const ultimo = lista[lista.length - 1];
       const mismoGrupo = (e) => e.grado === ultimo.grado && e.curso === ultimo.curso && e.sede_id === ultimo.sede_id;
@@ -186,7 +255,11 @@ function pintarListaCupo(contenedor, sedes, estudiantes, conteos) {
   const sedeNombre = listaCupoSede ? (sedes.find((s) => String(s.id) === listaCupoSede) || {}).nombre : "Todas las sedes IETABA";
   const columnas = COLUMNAS_LISTA_CUPO.filter((c) => listaCupoColumnas.includes(c.id));
   const titulo = esActivos
-    ? `Lista de estudiantes — ${lista.length} desde ${nombreGradoLista(listaCupoDesdeGrado)}`
+    ? `Lista de estudiantes — ${lista.length} ${
+        listaCupoGrupos.size
+          ? `de ${gruposEscogidosTxt}`
+          : `de ${nombreGradoLista(listaCupoDesdeGrado)} a ${nombreGradoLista(listaCupoHastaGrado)}`
+      }`
     : listaCupoVista === "posibles" ? "Estudiantes marcados como posible retiro" : "Estudiantes marcados como retirados";
 
   const accionesFila = (e) => {
@@ -222,18 +295,67 @@ function pintarListaCupo(contenedor, sedes, estudiantes, conteos) {
       ${
         esActivos
           ? `<label class="filtro-campo">Desde el grado
-               <select id="select-lista-desde">
+               <select id="select-lista-desde" ${listaCupoGrupos.size ? "disabled" : ""}>
                  ${NOMBRES_GRADOS.map(([n, nombre]) => `<option value="${n}" ${n === listaCupoDesdeGrado ? "selected" : ""}>${nombre}</option>`).join("")}
                </select>
              </label>
+             <label class="filtro-campo">Hasta el grado
+               <select id="select-lista-hasta" ${listaCupoGrupos.size ? "disabled" : ""}>
+                 ${NOMBRES_GRADOS.map(([n, nombre]) => `<option value="${n}" ${n === listaCupoHastaGrado ? "selected" : ""}>${nombre}</option>`).join("")}
+               </select>
+             </label>
              <label class="filtro-campo">Cantidad de estudiantes
-               <input type="number" id="input-lista-cantidad" value="${listaCupoCantidad}" min="1" step="1" />
+               <input type="number" id="input-lista-cantidad" value="${listaCupoCantidad}" min="1" step="1" ${listaCupoSinLimite ? "disabled" : ""} />
+             </label>
+             <label class="check-linea filtro-check">
+               <input type="checkbox" id="check-lista-sin-limite" ${listaCupoSinLimite ? "checked" : ""} /> Sin límite (todos los que cumplan)
              </label>`
           : ""
       }
       <button type="button" class="boton" id="btn-lista-pdf" ${lista.length ? "" : "disabled"}>📄 Descargar PDF</button>
       <button type="button" class="boton secundario" onclick="window.print()">🖨 Imprimir</button>
     </div>
+
+    ${
+      esActivos
+        ? `<div class="barra-filtros no-imprimir">
+             <strong>Incluir también:</strong>
+             <label class="check-linea filtro-check"><input type="checkbox" data-lista-incluir="posibles" ${listaCupoIncluir.posibles ? "checked" : ""} /> 🚪 Posibles retiros</label>
+             <label class="check-linea filtro-check"><input type="checkbox" data-lista-incluir="retirados" ${listaCupoIncluir.retirados ? "checked" : ""} /> ✖ Retirados</label>
+             <label class="check-linea filtro-check"><input type="checkbox" data-lista-incluir="sinGrupo" ${listaCupoIncluir.sinGrupo ? "checked" : ""} /> Sin grupo asignado</label>
+           </div>
+
+           <details class="seccion-colapsable no-imprimir" ${listaCupoGrupos.size ? "open" : ""}>
+             <summary>Grados y grupos a imprimir — ${
+               listaCupoGrupos.size ? `${listaCupoGrupos.size} escogido(s): ${gruposEscogidosTxt}` : "todos los del rango de grados"
+             }</summary>
+             <div class="toolbar">
+               <label class="filtro-campo">Escribe los grupos
+                 <input type="text" id="input-grupos-texto" placeholder="Ej: 4-2, 3-2 (o 4 = todo Cuarto)" value="${[...listaCupoGrupos].map(claveATextoGrupo).join(", ")}" />
+               </label>
+               <button type="button" class="boton secundario" id="btn-grupos-aplicar">Aplicar</button>
+               <button type="button" class="boton secundario" id="btn-grupos-limpiar">Todos (usar el rango de grados)</button>
+             </div>
+             ${[...new Set(gruposDisponibles.map((g) => g.grado))]
+               .sort((a, b) => a - b)
+               .map((grado) => {
+                 const delGrado = gruposDisponibles.filter((g) => g.grado === grado);
+                 const todos = delGrado.every((g) => listaCupoGrupos.has(g.clave));
+                 return `<div class="fila-grupos-lista">
+                   <button type="button" class="boton-texto-chico" data-grado-todos="${grado}">${todos ? "✓ " : ""}${nombreGradoLista(grado)} (todo el grado)</button>
+                   ${delGrado
+                     .map(
+                       (g) => `<label class="check-linea filtro-check"><input type="checkbox" data-grupo-lista="${g.clave}" ${
+                         listaCupoGrupos.has(g.clave) ? "checked" : ""
+                       } /> ${esc(g.etiqueta)} <span class="pendiente">(${g.total})</span></label>`
+                     )
+                     .join("")}
+                 </div>`;
+               })
+               .join("")}
+           </details>`
+        : ""
+    }
 
     <div class="barra-filtros no-imprimir">
       <strong>Columnas:</strong>
@@ -244,9 +366,26 @@ function pintarListaCupo(contenedor, sedes, estudiantes, conteos) {
 
     <div class="hoja-imprimir">
       <h2 style="margin:6px 0">${titulo}</h2>
-      <p class="pendiente">${sedeNombre}${esActivos ? ` · sin incluir los marcados como posible retiro ni retirados${
-        sinGrupoEnRango ? `, ni ${sinGrupoEnRango} estudiante(s) sin grupo asignado` : ""
-      }` : ""}</p>
+      <p class="pendiente">${sedeNombre}${
+        esActivos
+          ? ` · ${
+              [
+                listaCupoIncluir.posibles ? "" : "posibles retiros",
+                listaCupoIncluir.retirados ? "" : "retirados",
+                listaCupoIncluir.sinGrupo || !sinGrupoEnRango ? "" : `${sinGrupoEnRango} sin grupo asignado`,
+              ].filter(Boolean).length
+                ? "sin incluir: " +
+                  [
+                    listaCupoIncluir.posibles ? "" : "posibles retiros",
+                    listaCupoIncluir.retirados ? "" : "retirados",
+                    listaCupoIncluir.sinGrupo || !sinGrupoEnRango ? "" : `${sinGrupoEnRango} sin grupo asignado`,
+                  ]
+                    .filter(Boolean)
+                    .join(", ")
+                : "incluye posibles retiros, retirados y sin grupo"
+            }`
+          : ""
+      }</p>
       ${esActivos ? `<p>${notaCorte}</p>` : `<p class="conteo-resultados">${lista.length} estudiante(s)</p>`}
       ${
         esActivos && porGrado.size
@@ -277,7 +416,18 @@ function pintarListaCupo(contenedor, sedes, estudiantes, conteos) {
                      (e, i) => `<tr>
                    <td class="no-imprimir"><input type="checkbox" data-lista-sel="${e.id}" ${listaCupoSeleccion.has(e.id) ? "checked" : ""} /></td>
                    <td>${i + 1}</td>
-                   ${columnas.map((c) => `<td>${esc(c.valor(e))}</td>`).join("")}
+                   ${columnas
+                     .map(
+                       (c, ci) =>
+                         `<td>${esc(c.valor(e))}${
+                           ci === 0 && e.retirado
+                             ? ' <span class="chip-retiro chip-retirado">✖ RETIRADO</span>'
+                             : ci === 0 && e.posible_retirado
+                             ? ' <span class="chip-retiro">🚪 posible retiro</span>'
+                             : ""
+                         }</td>`
+                     )
+                     .join("")}
                    <td class="no-imprimir" style="white-space:nowrap">${accionesFila(e)}</td>
                  </tr>`
                    )
@@ -292,6 +442,66 @@ function pintarListaCupo(contenedor, sedes, estudiantes, conteos) {
   `;
 
   vincularListaCupo(contenedor, sedes, lista);
+
+  // Filtros que no necesitan volver a pedir datos al servidor: se repinta.
+  const repintar = () => pintarListaCupo(contenedor, sedes, estudiantes, conteos);
+  document.getElementById("select-lista-desde")?.addEventListener("change", (ev) => {
+    listaCupoDesdeGrado = Number(ev.target.value);
+    if (listaCupoHastaGrado < listaCupoDesdeGrado) listaCupoHastaGrado = listaCupoDesdeGrado;
+    repintar();
+  });
+  document.getElementById("input-lista-cantidad")?.addEventListener("change", (ev) => {
+    const n = parseInt(ev.target.value, 10);
+    listaCupoCantidad = n > 0 ? n : listaCupoCantidad;
+    repintar();
+  });
+  document.getElementById("select-lista-hasta")?.addEventListener("change", (ev) => {
+    listaCupoHastaGrado = Number(ev.target.value);
+    if (listaCupoHastaGrado < listaCupoDesdeGrado) listaCupoDesdeGrado = listaCupoHastaGrado;
+    repintar();
+  });
+  document.getElementById("check-lista-sin-limite")?.addEventListener("change", (ev) => {
+    listaCupoSinLimite = ev.target.checked;
+    repintar();
+  });
+  contenedor.querySelectorAll("[data-lista-incluir]").forEach((chk) =>
+    chk.addEventListener("change", () => {
+      listaCupoIncluir[chk.dataset.listaIncluir] = chk.checked;
+      repintar();
+    })
+  );
+  contenedor.querySelectorAll("[data-grupo-lista]").forEach((chk) =>
+    chk.addEventListener("change", () => {
+      if (chk.checked) listaCupoGrupos.add(chk.dataset.grupoLista);
+      else listaCupoGrupos.delete(chk.dataset.grupoLista);
+      repintar();
+    })
+  );
+  contenedor.querySelectorAll("[data-grado-todos]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const grado = Number(btn.dataset.gradoTodos);
+      const claves = gruposDisponibles.filter((g) => g.grado === grado).map((g) => g.clave);
+      const todos = claves.every((c) => listaCupoGrupos.has(c));
+      claves.forEach((c) => (todos ? listaCupoGrupos.delete(c) : listaCupoGrupos.add(c)));
+      repintar();
+    })
+  );
+  const aplicarGruposEscritos = () => {
+    const campo = document.getElementById("input-grupos-texto");
+    if (!campo) return;
+    const { claves, desconocidos } = clavesDesdeTexto(campo.value, new Set(gruposDisponibles.map((g) => g.clave)));
+    if (desconocidos.length) alert(`No existen en esta sede: ${desconocidos.join(", ")}`);
+    listaCupoGrupos = claves;
+    repintar();
+  };
+  document.getElementById("btn-grupos-aplicar")?.addEventListener("click", aplicarGruposEscritos);
+  document.getElementById("input-grupos-texto")?.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") aplicarGruposEscritos();
+  });
+  document.getElementById("btn-grupos-limpiar")?.addEventListener("click", () => {
+    listaCupoGrupos.clear();
+    repintar();
+  });
 
   contenedor.querySelectorAll("[data-lista-columna]").forEach((chk) =>
     chk.addEventListener("change", () => {
@@ -316,9 +526,13 @@ function pintarListaCupo(contenedor, sedes, estudiantes, conteos) {
         vista: listaCupoVista,
         sede_nombre: sedeNombre,
         desde_grado: listaCupoDesdeGrado,
-        cantidad: esActivos ? listaCupoCantidad : null,
-        completo: !esActivos || candidatos.length <= lista.length,
+        hasta_grado: listaCupoHastaGrado,
+        grupos_txt: esActivos ? gruposEscogidosTxt : "",
+        cantidad: esActivos && !listaCupoSinLimite ? listaCupoCantidad : null,
+        completo: !esActivos || listaCupoSinLimite || candidatos.length <= lista.length,
         sin_grupo_excluidos: sinGrupoEnRango,
+        incluye_posibles: esActivos && listaCupoIncluir.posibles,
+        incluye_retirados: esActivos && listaCupoIncluir.retirados,
       });
     } catch (err) {
       alert(err.message);
@@ -338,6 +552,7 @@ async function descargarPdfListaCupo(cuerpo) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(cuerpo),
     });
+  await asegurarSesionFresca(); // Fase 4A': renovar antes, no solo tras un 401
   let res = await pedir();
   if (res.status === 401 && (await _intentarRefresh())) res = await pedir();
   if (!res.ok) {
@@ -384,15 +599,6 @@ function vincularListaCupo(contenedor, sedes, lista) {
   document.getElementById("select-lista-sede").addEventListener("change", (e) => {
     listaCupoSede = e.target.value;
     listaCupoSeleccion.clear();
-    recargar();
-  });
-  document.getElementById("select-lista-desde")?.addEventListener("change", (e) => {
-    listaCupoDesdeGrado = Number(e.target.value);
-    recargar();
-  });
-  document.getElementById("input-lista-cantidad")?.addEventListener("change", (e) => {
-    const n = parseInt(e.target.value, 10);
-    listaCupoCantidad = n > 0 ? n : listaCupoCantidad;
     recargar();
   });
 
@@ -853,7 +1059,10 @@ function vincularConciliacion(contenedor, sedes) {
   document.getElementById("btn-actualizar-conciliacion").addEventListener("click", () => {
     cargarYPintarConciliacion(contenedor, sedes);
   });
-  document.getElementById("btn-exportar-conciliacion").addEventListener("click", () => {
+  document.getElementById("btn-exportar-conciliacion").addEventListener("click", async () => {
+    // Fase 4A': la descarga la hace el navegador, no api(): si el token de
+    // acceso venciera, aquí no habría forma de renovarlo ni de reintentar.
+    await asegurarSesionFresca();
     window.location.href = `/api/reportes/conciliacion/exportar?${urlConciliacionParams()}`;
   });
   document.getElementById("input-conciliacion-anio").addEventListener("change", (e) => {

@@ -874,8 +874,8 @@ class ObservacionPermiso(Base):
     HABRÍA pasado si el permiso ya se exigiera de verdad. Sirve para revisar
     el patrón acumulado antes de activar el bloqueo real (Fase 4B).
 
-    usuario_id = NULL significa "sin sesión" (nadie logueado hizo la
-    petición), no un usuario borrado."""
+    usuario_id = NULL significa que la petición llegó sin identidad, no un
+    usuario borrado. El porqué lo dice `resultado` (ver abajo)."""
 
     __tablename__ = "observaciones_permisos"
 
@@ -885,7 +885,14 @@ class ObservacionPermiso(Base):
     metodo: Mapped[str] = mapped_column(String(10))
     permiso: Mapped[str] = mapped_column(String(80))
     usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
-    # "sin_sesion" | "habria_pasado" | "habria_sido_rechazado"
+    # Con identidad:  "habria_pasado" | "habria_sido_rechazado"
+    # Sin identidad:  "sin_sesion" (nadie inició sesión aquí)
+    #                 "sesion_vencida" (Fase 4A': token de acceso caducado,
+    #                  recuperable con un refresh)
+    #                 "sesion_revocada" (Fase 4A': sesión cerrada o usuario
+    #                  desactivado; hay que volver a iniciar sesión)
+    # Ver rbac._por_que_no_hay_identidad(). La columna no tiene CHECK: añadir
+    # un valor nuevo no exige migrar nada.
     resultado: Mapped[str] = mapped_column(String(30))
     ip: Mapped[str | None] = mapped_column(String(60), nullable=True)
 

@@ -358,6 +358,9 @@ async function subirDocumentoCategoria(categoria, permanente, fotoIdAReemplazar,
   form.set("anio_lectivo", String(fichaDocAnioSeleccionado ?? new Date().getFullYear()));
   form.set("permanente", permanente ? "true" : "false");
   form.set("archivo", archivo, nombreArchivo || undefined);
+  // Fase 4A': fetch crudo (sube un archivo), no pasa por api(): la renovación
+  // del token de acceso hay que pedirla explícitamente.
+  await asegurarSesionFresca();
   const res = await fetch(`/api/estudiantes/${fichaEstudianteId}/fotos`, { method: "POST", body: form });
   if (!res.ok) {
     const cuerpo = await res.json().catch(() => ({}));
@@ -674,6 +677,7 @@ async function renderFicha() {
     const cont = document.getElementById("resultado-foto");
     cont.innerHTML = "<p>Subiendo...</p>";
     try {
+      await asegurarSesionFresca(); // Fase 4A': fetch crudo, no pasa por api()
       const res = await fetch(`/api/estudiantes/${fichaEstudianteId}/fotos`, { method: "POST", body: form });
       if (!res.ok) {
         const cuerpo = await res.json().catch(() => ({}));

@@ -67,6 +67,11 @@ COLUMNAS = {
     "grupo": ("Grado / Grupo", lambda e, hoy: e.grupo, 2.4),
     "sede": ("Sede", lambda e, hoy: e.sede.nombre if e.sede else "", 3.4),
     "estado": ("Estado", lambda e, hoy: e.estado or "", 1.5),
+    "marca": (
+        "Marca",
+        lambda e, hoy: "Retirado" if e.retirado else ("Posible retiro" if e.posible_retirado else ""),
+        1.8,
+    ),
     "observaciones": ("Observaciones", lambda e, hoy: e.observaciones or "", 3.5),
     "firma": ("Firma", lambda e, hoy: "", 3),
 }
@@ -122,10 +127,14 @@ def _explicacion(
     sede: str,
     desde: str,
     hasta: str,
+    hasta_grado_nombre: str,
     cantidad: int | None,
     completo: bool,
     hoy: dt.date,
     sin_grupo: int = 0,
+    grupos_txt: str = "",
+    incluye_posibles: bool = False,
+    incluye_retirados: bool = False,
 ) -> str:
     fuente = (
         "La información se toma de la base de datos de matrícula del sistema institucional de la "
@@ -142,20 +151,38 @@ def _explicacion(
             f"El presente documento relaciona los <b>{n}</b> estudiantes de <b>{sede}</b> que se "
             "encuentran marcados en el sistema como <b>retirados</b>. " + fuente
         )
+    alcance = (
+        f"correspondientes a los grupos <b>{grupos_txt}</b>"
+        if grupos_txt
+        else f"organizados por grado y grupo, tomados en orden desde <b>{desde}</b> hasta <b>{hasta_grado_nombre}</b>"
+    )
     cupo = ""
     if cantidad and not completo:
         cupo = f" El listado corresponde a un cupo de <b>{cantidad}</b> estudiantes, que alcanza hasta el grupo <b>{hasta}</b>."
+
+    incluidos = []
+    if incluye_posibles:
+        incluidos.append("marcados como posible retiro")
+    if incluye_retirados:
+        incluidos.append("como retirados" if incluidos else "marcados como retirados")
+    excluidos = []
+    if not incluye_posibles:
+        excluidos.append("marcados como posible retiro")
+    if not incluye_retirados:
+        excluidos.append("como retirados" if excluidos else "marcados como retirados")
+    if sin_grupo:
+        excluidos.append(
+            f"{sin_grupo} que aún no tiene{'' if sin_grupo == 1 else 'n'} grupo asignado"
+        )
+    criterios = ""
+    if incluidos:
+        criterios += f" Se incluyen los estudiantes {' y '.join(incluidos)}."
+    if excluidos:
+        criterios += f" No se incluyen los estudiantes {' ni '.join(excluidos)}."
+
     return (
         f"El presente documento relaciona <b>{n}</b> estudiantes con matrícula activa en <b>{sede}</b>, "
-        f"organizados por grado y grupo, tomados en orden desde <b>{desde}</b> hasta <b>{hasta}</b>.{cupo} "
-        "No se incluyen los estudiantes marcados en el sistema como posible retiro o retirados"
-        + (
-            f", ni {sin_grupo} estudiante{'' if sin_grupo == 1 else 's'} que aún no "
-            f"tiene{'' if sin_grupo == 1 else 'n'} grupo asignado. "
-            if sin_grupo
-            else ". "
-        )
-        + fuente
+        f"{alcance}.{cupo}{criterios} " + fuente
     )
 
 
@@ -166,6 +193,10 @@ def generar_lista_pdf(
     vista: str = "activos",
     sede_nombre: str = "",
     desde_grado: int = 0,
+    hasta_grado: int = 11,
+    grupos_txt: str = "",
+    incluye_posibles: bool = False,
+    incluye_retirados: bool = False,
     cantidad: int | None = None,
     completo: bool = False,
     sin_grupo_excluidos: int = 0,
@@ -234,9 +265,14 @@ def generar_lista_pdf(
         "posibles": "LISTADO DE ESTUDIANTES MARCADOS COMO POSIBLE RETIRO",
         "retirados": "LISTADO DE ESTUDIANTES MARCADOS COMO RETIRADOS",
     }.get(vista, "LISTADO DE ESTUDIANTES MATRICULADOS")
-    subtitulo = (
-        f"De {nombre_desde} a {hasta}" if vista == "activos" else "Seguimiento de matrícula"
-    )
+    nombre_hasta = models.GRADOS_NOMBRES.get(hasta_grado, str(hasta_grado))
+    if vista != "activos":
+        subtitulo = "Seguimiento de matrícula"
+    elif grupos_txt:
+        subtitulo = f"Grupos: {grupos_txt}"
+    else:
+        subtitulo = f"De {nombre_desde} a {nombre_hasta}"
+
     sede_txt = sede_nombre or (estudiantes[0].sede.nombre if estudiantes[0].sede else "")
 
     resumen: dict[int, dict] = {}
@@ -259,8 +295,9 @@ def generar_lista_pdf(
     <h1>{html.escape(titulo)}</h1>
     <p class="subtitulo">{html.escape(subtitulo)}</p>
     <p class="explicacion">{_explicacion(vista, len(estudiantes), html.escape(sede_txt), nombre_desde,
-                                         html.escape(hasta), cantidad, completo, hoy,
-                                         max(sin_grupo_excluidos, 0))}</p>
+                                         html.escape(hasta), nombre_hasta, cantidad, completo, hoy,
+                                         max(sin_grupo_excluidos, 0), html.escape(grupos_txt),
+                                         incluye_posibles, incluye_retirados)}</p>
     <table class="datos">
       <tr><td class="et" width="22%">Sede</td><td width="28%">{html.escape(sede_txt)}</td>
           <td class="et" width="22%">Año lectivo</td><td width="28%">{fechas.anio_lectivo_actual()}</td></tr>

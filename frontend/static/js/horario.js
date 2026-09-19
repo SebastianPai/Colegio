@@ -12,6 +12,7 @@ const SECCIONES_HORARIO = [
   { id: "reemplazos", label: "Reemplazos de hoy" },
   { id: "conflictos", label: "Conflictos" },
   { id: "general", label: "General" },
+  { id: "horaslibres", label: "Horas libres" },
   { id: "reporte", label: "Reporte Word" },
 ];
 
@@ -271,10 +272,167 @@ async function renderHorario() {
     if (horarioSub === "reemplazos") return renderHorarioReemplazos(cont);
     if (horarioSub === "conflictos") return renderHorarioConflictos(cont);
     if (horarioSub === "general") return renderHorarioGeneral(cont);
+    if (horarioSub === "horaslibres") return renderHorarioHorasLibres(cont);
     if (horarioSub === "reporte") return renderHorarioReporte(cont);
   } catch (e) {
     cont.innerHTML = `<div class="callout-boletines warn">${e.message}</div>`;
   }
+}
+
+// --- HORAS LIBRES (cuadro general de toda la planta) ---------------------
+// Una tabla por día con TODOS los docentes: qué dicta cada hora y dónde
+// está libre. Mismo contenido que el PDF horizontal con membrete.
+
+let horasLibresDias = new Set([1, 2, 3, 4, 5]);
+let horasLibresSoloConLibres = false;
+let horasLibresFormato = "cuadro"; // cuadro = tabla por día | por_hora = una fila por franja
+
+// P = primaria, S = secundaria, P·S = dicta en los dos niveles.
+function nivelLibresHtml(niveles = []) {
+  const t = niveles.length > 1 ? "P·S" : niveles[0] === "primaria" ? "P" : niveles[0] === "secundaria" ? "S" : "";
+  return t ? ` <span class="hl-nivel" title="${niveles.join(" y ")}">${t}</span>` : "";
+}
+
+async function renderHorarioHorasLibres(cont) {
+  const r = await api(`/api/horario/horas-libres?anio_lectivo=${horarioAnio}`);
+  if (!r.docentes.length) {
+    cont.innerHTML = `<div class="callout-boletines warn">No hay horario cargado para ${horarioAnio}.</div>`;
+    return;
+  }
+  const dias = DIAS_HORARIO.filter(([d]) => horasLibresDias.has(d));
+  const totalLibres = r.docentes.reduce((n, d) => n + d.total_libres, 0);
+
+  // Formato "una fila por hora": por día, cada franja con quiénes están libres
+  // (en columnas, para que los nombres queden alineados).
+  const tablaPorHora = ([dia, nombre]) => {
+    const libresDia = r.docentes.reduce((n, d) => n + (d.libres_por_dia[dia] ?? 0), 0);
+    return `
+      <h3 class="titulo-dia-libres">${nombre} <span class="pendiente">(${libresDia} horas libres en total)</span></h3>
+      <div class="tabla-scroll"><table class="tabla-horas-libres">
+        <thead><tr><th class="col-doc">Hora</th><th>Libres</th><th class="col-doc">Docentes libres en esa hora</th></tr></thead>
+        <tbody>
+          ${r.franjas
+            .map((f, i) => {
+              const libres = r.docentes
+                .filter((d) => !d.celdas[`${dia}-${f.hora}`])
+                .map((d) => ({ nombre: d.nombre_completo, niveles: d.niveles || [] }))
+                .sort((a, b) => a.nombre.localeCompare(b.nombre));
+              return `<tr class="${i % 2 ? "par" : ""}">
+                <td class="col-doc hl-franja">${f.hora}ª hora <span class="hl-hora">${f.inicio}–${f.fin}</span></td>
+                <td class="tot hl-cuenta">${libres.length}</td>
+                <td class="col-doc hl-nombres">${
+                  libres.length
+                    ? `<ul class="hl-lista">${libres
+                        .map((d) => `<li>${esc(d.nombre)}${nivelLibresHtml(d.niveles)}</li>`)
+                        .join("")}</ul>`
+                    : '<span class="hl-nadie">Ningún docente libre en esta hora</span>'
+                }</td>
+              </tr>`;
+            })
+            .join("")}
+        </tbody>
+      </table></div>`;
+  };
+
+  // Formato "cuadro por día": todos los docentes por las 6 franjas.
+  const tablaDia = ([dia, nombre]) => {
+    const docentes = horasLibresSoloConLibres
+      ? r.docentes.filter((d) => (d.libres_por_dia[dia] ?? 0) > 0)
+      : r.docentes;
+    const libresDia = r.docentes.reduce((n, d) => n + (d.libres_por_dia[dia] ?? 0), 0);
+    return `
+      <h3 class="titulo-dia-libres">${nombre} <span class="pendiente">(${libresDia} horas libres · ${docentes.length} docentes)</span></h3>
+      <div class="tabla-scroll"><table class="tabla-horas-libres">
+        <thead><tr><th class="col-doc">Docente</th>
+          ${r.franjas.map((f) => `<th>${f.hora}ª<br/><span class="hl-hora">${f.inicio}–${f.fin}</span></th>`).join("")}
+          <th>Libres</th></tr></thead>
+        <tbody>
+          ${docentes
+            .map(
+              (d, i) => `<tr class="${i % 2 ? "par" : ""}">
+                <td class="col-doc">${esc(d.nombre_completo)}${nivelLibresHtml(d.niveles)}</td>
+                ${r.franjas
+                  .map((f) => {
+                    const t = d.celdas[`${dia}-${f.hora}`];
+                    return t ? `<td>${esc(t)}</td>` : '<td class="hl-libre">LIBRE</td>';
+                  })
+                  .join("")}
+                <td class="tot">${d.libres_por_dia[dia] ?? 0}</td>
+              </tr>`
+            )
+            .join("")}
+        </tbody>
+      </table></div>`;
+  };
+
+  cont.innerHTML = `
+    <div class="barra-filtros no-imprimir">
+      <strong>Días:</strong>
+      ${DIAS_HORARIO.map(
+        ([n, nombre]) => `<label class="check-linea filtro-check"><input type="checkbox" data-dia-libres="${n}" ${
+          horasLibresDias.has(n) ? "checked" : ""
+        } /> ${nombre}</label>`
+      ).join("")}
+
+      <label class="filtro-campo">Formato
+        <select id="select-formato-libres">
+          <option value="cuadro" ${horasLibresFormato === "cuadro" ? "selected" : ""}>Cuadro por día (todas las horas)</option>
+          <option value="por_hora" ${horasLibresFormato === "por_hora" ? "selected" : ""}>Una fila por hora (solo los libres)</option>
+        </select>
+      </label>
+      ${
+        horasLibresFormato === "cuadro"
+          ? `<label class="check-linea filtro-check"><input type="checkbox" id="check-solo-con-libres" ${
+              horasLibresSoloConLibres ? "checked" : ""
+            } /> Solo docentes con horas libres ese día</label>`
+          : ""
+      }
+      <button type="button" class="boton" id="btn-horas-libres-pdf">📄 Descargar PDF (horizontal)</button>
+      <button type="button" class="boton secundario" onclick="window.print()">🖨 Imprimir</button>
+    </div>
+
+    <div class="hoja-imprimir">
+      <h2 style="margin:6px 0">Horas libres de los docentes — Sede #01 · ${horarioAnio}</h2>
+      <p class="pendiente">${r.docentes.length} docentes con horario · ${totalLibres} horas libres a la semana ·
+        LIBRE = esa franja no tiene clase asignada (no cuenta permisos ni ausencias del día) ·
+        <span class="hl-nivel">P</span> primaria · <span class="hl-nivel">S</span> secundaria ·
+        <span class="hl-nivel">P·S</span> los dos niveles.</p>
+
+      ${dias.map(horasLibresFormato === "por_hora" ? tablaPorHora : tablaDia).join("")}
+    </div>
+  `;
+
+  cont.querySelectorAll("[data-dia-libres]").forEach((chk) =>
+    chk.addEventListener("change", () => {
+      const dia = Number(chk.dataset.diaLibres);
+      if (chk.checked) horasLibresDias.add(dia);
+      else horasLibresDias.delete(dia);
+      renderHorarioHorasLibres(cont);
+    })
+  );
+  document.getElementById("check-solo-con-libres")?.addEventListener("change", (e) => {
+    horasLibresSoloConLibres = e.target.checked;
+    renderHorarioHorasLibres(cont);
+  });
+  document.getElementById("select-formato-libres").addEventListener("change", (e) => {
+    horasLibresFormato = e.target.value;
+    renderHorarioHorasLibres(cont);
+  });
+  document.getElementById("btn-horas-libres-pdf").addEventListener("click", async () => {
+    if (!horasLibresDias.size) return alert("Escoge al menos un día.");
+    // La pestaña se abre dentro del clic (ver nota en el reporte Word).
+    const ventana = window.open("", "_blank");
+    await asegurarSesionFresca();
+    const params = new URLSearchParams({
+      anio_lectivo: horarioAnio,
+      dias: [...horasLibresDias].sort().join(","),
+      solo_libres: horasLibresSoloConLibres,
+      formato: horasLibresFormato,
+    });
+    const url = `/api/horario/horas-libres.pdf?${params}`;
+    if (ventana) ventana.location = url;
+    else window.location.href = url;
+  });
 }
 
 // --- CONFLICTOS (dos docentes para el mismo grupo+hora) ------------------
@@ -1573,7 +1731,7 @@ function renderHorarioReporte(cont) {
     horarioReporteBloques.push({ dia: "ma", grado: 6, horas: [2, 3, 4] });
     renderHorarioReporte(cont);
   });
-  cont.querySelector("#rep-generar").addEventListener("click", () => {
+  cont.querySelector("#rep-generar").addEventListener("click", async () => {
     sincronizar();
     const aviso = cont.querySelector("#rep-aviso");
     if (!horarioReporteBloques.length) {
@@ -1596,6 +1754,15 @@ function renderHorarioReporte(cont) {
     );
     // Pestaña aparte: la respuesta es Content-Disposition: attachment, así que
     // el navegador baja el .docx y la pestaña en blanco se cierra sola.
-    window.open(`/api/horario/reporte.docx?${params.toString()}`, "_blank");
+    //
+    // Fase 4A': la pestaña se abre YA, dentro del clic y sin esperar nada —
+    // si se abriera después del await, el bloqueador de elementos emergentes
+    // la cortaría por no venir de un gesto del usuario. La URL se le pone
+    // después, con la sesión ya renovada si hacía falta.
+    const ventana = window.open("", "_blank");
+    await asegurarSesionFresca();
+    const url = `/api/horario/reporte.docx?${params.toString()}`;
+    if (ventana) ventana.location = url;
+    else window.location.href = url; // si aun así la bloquearon, se baja en esta pestaña
   });
 }

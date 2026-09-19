@@ -126,8 +126,24 @@ def usuario_db(usuario_id: int) -> models.Usuario | None:
 # ---- 1. Usuarios y contraseñas (sin HTTP) -----------------------------------
 print("\n[1] Creación de usuarios y hash de contraseñas")
 db = SessionLocal()
-docente = db.scalars(select(models.Docente).order_by(models.Docente.id)).first()
+# El primero SIN usuario todavía: en la base real (de la que sale la copia)
+# puede que YA todos los docentes tengan uno propio (rollout completo). En
+# ese caso se crea un docente de prueba SOLO en esta copia temporal — nunca
+# toca la base real — para poder seguir probando el enlace usuario-docente.
+docentes_con_usuario = select(models.Usuario.docente_id).where(models.Usuario.docente_id.is_not(None))
+docente = db.scalars(
+    select(models.Docente).where(models.Docente.id.not_in(docentes_con_usuario)).order_by(models.Docente.id)
+).first()
+if docente is None:
+    docente = models.Docente(documento="PRUEBA-DOCENTE-SIN-USUARIO", nombre_completo="Prueba Docente Libre")
+    db.add(docente)
+    db.flush()
 docentes_antes = db.query(models.Docente).count()
+# Snapshot para el chequeo [17] "nada académico cambió" — la base real crece
+# con el tiempo (matrícula nueva, etc.), así que se compara contra lo que
+# había AL EMPEZAR esta corrida, no contra un número fijo.
+estudiantes_antes = db.query(models.Estudiante).count()
+bloques_antes = db.query(models.BloqueHorario).count()
 
 admin = auth.registrar_usuario(
     db, documento="PRUEBA-ADMIN", nombre="Prueba Administrativa", clave=CLAVE,
@@ -445,10 +461,13 @@ try:
     for ruta in ("/api/sedes", "/api/docentes", "/api/horario/hoy", "/api/boletines/resumen"):
         verificar(f"{ruta} sigue respondiendo sin sesión", Cliente("anónimo").pedir(ruta)[0] == 200)
     db = SessionLocal()
-    verificar("los datos académicos no cambiaron (2149 estudiantes, 72 docentes, 1049 bloques)",
-              db.query(models.Estudiante).count() == 2149
-              and db.query(models.Docente).count() == 72
-              and db.query(models.BloqueHorario).count() == 1049)
+    verificar(
+        f"los datos académicos no cambiaron ({estudiantes_antes} estudiantes, "
+        f"{docentes_antes} docentes, {bloques_antes} bloques)",
+        db.query(models.Estudiante).count() == estudiantes_antes
+        and db.query(models.Docente).count() == docentes_antes
+        and db.query(models.BloqueHorario).count() == bloques_antes
+    )
     verificar("no hay ninguna asistencia registrada por estas pruebas", db.query(models.Asistencia).count() == 0)
     db.close()
 finally:

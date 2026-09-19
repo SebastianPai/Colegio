@@ -102,6 +102,36 @@ def requiere(codigo_permiso: str):
 # bloqueo de verdad (Fase 4B) — no es protección, es solo instrumentación.
 
 
+def _por_que_no_hay_identidad(request: Request) -> str:
+    """Fase 4A': por qué esta petición llegó sin identidad. Antes todo esto
+    se guardaba como "sin_sesion", y eso mezclaba dos cosas muy distintas al
+    revisar los datos: a quien nunca inició sesión con quien la tiene abierta
+    pero se le venció el token de acceso (15 min).
+
+    La cookie de acceso es de SESIÓN DEL NAVEGADOR (no lleva max_age, ver
+    routers/auth.py): sigue ahí aunque el token de adentro ya haya vencido,
+    y el navegador la sigue enviando. Eso es justo lo que permite separar
+    los tres casos sin consultar la base:
+
+      · sin_sesion      → no hay cookie: nadie inició sesión en este
+                          navegador (o es un script/curl).
+      · sesion_vencida  → hay cookie pero su token no vale: casi siempre
+                          pasaron los 15 minutos. Es RECUPERABLE solo con
+                          refrescar, sin volver a pedir la contraseña.
+      · sesion_revocada → el token está bien firmado y vigente, pero la
+                          sesión ya no vive o el usuario no está activo
+                          (logout desde otro equipo, revocación, usuario
+                          desactivado). NO es recuperable con un refresh:
+                          en Fase 4B esta persona debe volver a entrar.
+    """
+    cookie = request.cookies.get(seguridad.COOKIE_ACCESO) or ""
+    if not cookie:
+        return "sin_sesion"
+    if seguridad.verificar_acceso(cookie) is None:
+        return "sesion_vencida"
+    return "sesion_revocada"
+
+
 def _registrar_observacion(
     db: Session, request: Request, codigo_permiso: str, usuario_id: int | None, resultado: str
 ) -> None:
@@ -143,7 +173,7 @@ def observar(codigo_permiso: str, *, tambien_servicio: bool = False):
                 return None  # llamada legítima de un script SAPRED: no se observa como rechazo
 
         if identidad is None:
-            resultado = "sin_sesion"
+            resultado = _por_que_no_hay_identidad(request)
             usuario_id = None
         elif tiene_permiso(db, identidad.usuario, codigo_permiso):
             resultado = "habria_pasado"

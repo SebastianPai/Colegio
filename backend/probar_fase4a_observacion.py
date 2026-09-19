@@ -118,6 +118,19 @@ try:
     else:
         raise RuntimeError("el servidor de prueba no respondió a tiempo")
 
+    # La copia arrastra las observaciones REALES de colegio.db (miles, con
+    # todos los resultados posibles). Se anota hasta dónde llegaba la tabla
+    # para que el paso [7] mire SOLO lo que genera esta prueba; si no, una
+    # fila histórica de /api/estudiantes haría fallar comprobaciones que sí
+    # están bien.
+    _db = SessionLocal()
+    from sqlalchemy import func as _func, select as _select  # noqa: E402
+
+    from app import models as _models  # noqa: E402
+
+    ID_BASE = _db.scalar(_select(_func.max(_models.ObservacionPermiso.id))) or 0
+    _db.close()
+
     # ---- 3. Sin sesión: pasa igual, se registra "sin_sesion" ----------------
     print("\n[3] Sin sesión: la ruta sigue respondiendo, se registra 'sin_sesion'")
     anonimo = Cliente("anónimo")
@@ -159,17 +172,71 @@ try:
     estado, _ = servicio.pedir("/api/sedes", "GET", None, {seguridad.CABECERA_TOKEN_SERVICIO: TOKEN_REAL})
     verificar(f"GET /api/sedes con token de servicio responde {estado}", estado == 200)
 
+    # ---- 6b. Fase 4A': por qué NO hay identidad -------------------------------
+    # Antes los tres casos se guardaban como "sin_sesion", y eso escondía el
+    # más común de todos: la persona SÍ está dentro, pero se le venció el
+    # token de acceso de 15 minutos. Los tokens se firman a mano para no
+    # tener que esperar un cuarto de hora dentro de la prueba.
+    print("\n[6b] Fase 4A': sin_sesion / sesion_vencida / sesion_revocada")
+    import datetime as _dt
+
+    from app import fechas as _fechas
+
+    vencido = seguridad.firmar_acceso(
+        DOCENTE_PRUEBA_ID, "sesion-inventada", _fechas.ahora_utc() - _dt.timedelta(minutes=1)
+    )
+    estado, _ = anonimo.pedir(
+        "/api/horario/hoy", "GET", None, {"Cookie": f"{seguridad.COOKIE_ACCESO}={vencido}"}
+    )
+    verificar(f"con token de acceso VENCIDO la ruta sigue respondiendo {estado} (observar no bloquea)",
+              estado == 200)
+
+    # Firma válida y vigente, pero la sesión que nombra no existe: es lo que
+    # ve el servidor tras un logout desde otro equipo o una revocación.
+    revocado = seguridad.firmar_acceso(
+        DOCENTE_PRUEBA_ID, "sesion-inventada", _fechas.ahora_utc() + _dt.timedelta(minutes=10)
+    )
+    estado, _ = anonimo.pedir(
+        "/api/horario/conflictos", "GET", None, {"Cookie": f"{seguridad.COOKIE_ACCESO}={revocado}"}
+    )
+    verificar(f"con sesión REVOCADA la ruta sigue respondiendo {estado} (observar no bloquea)",
+              estado == 200)
+
     # ---- 7. Revisar lo registrado (necesita sesión de administrador real) ------
     print("\n[7] Las observaciones quedaron registradas correctamente")
     db = SessionLocal()
     from app import models
     from sqlalchemy import select
 
-    filas = db.scalars(select(models.ObservacionPermiso)).all()
-    verificar(f"hay observaciones registradas ({len(filas)})", len(filas) > 0)
+    filas = db.scalars(
+        select(models.ObservacionPermiso).where(models.ObservacionPermiso.id > ID_BASE)
+    ).all()
+    verificar(f"hay observaciones registradas por esta prueba ({len(filas)})", len(filas) > 0)
 
     sin_sesion = [f for f in filas if f.resultado == "sin_sesion"]
     verificar("hay al menos una fila 'sin_sesion' (de la petición anónima)", len(sin_sesion) > 0)
+
+    # Fase 4A': los tres motivos de "no hay identidad" quedan separados.
+    vencidas = [f for f in filas if f.resultado == "sesion_vencida"]
+    verificar(
+        f"el token vencido quedó como 'sesion_vencida', no como 'sin_sesion' ({len(vencidas)})",
+        len(vencidas) > 0,
+    )
+    revocadas = [f for f in filas if f.resultado == "sesion_revocada"]
+    verificar(
+        f"la sesión revocada quedó como 'sesion_revocada' ({len(revocadas)})",
+        len(revocadas) > 0,
+    )
+    # El GET anónimo del paso [3] no llevaba NINGUNA cookie: debe seguir
+    # cayendo en "sin_sesion", sin contaminarse con los dos motivos nuevos.
+    anonimas = [
+        f for f in filas
+        if f.endpoint == "/api/estudiantes" and f.metodo == "GET" and f.usuario_id is None
+    ]
+    verificar(
+        "sin cookie de acceso se sigue registrando 'sin_sesion' (no se contamina con los otros dos)",
+        len(anonimas) > 0 and all(f.resultado == "sin_sesion" for f in anonimas),
+    )
 
     docente_id = DOCENTE_PRUEBA_ID
     rechazadas_docente = [

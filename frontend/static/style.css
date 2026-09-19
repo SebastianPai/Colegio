@@ -2363,3 +2363,69 @@ tr.fila-posible-retiro > td { opacity: 0.55; }
   .modal-fondo { position: static; background: none; padding: 0; display: block; }
   .modal-caja, .modal-caja-ancha { box-shadow: none; border-radius: 0; padding: 0; max-width: none; max-height: none; overflow: visible; }
 }
+
+/* Reportes → Lista de estudiantes: escoger grados y grupos concretos
+   (ej. solo 4-2 y 6-4) dentro del desplegable de filtros. */
+.fila-grupos-lista {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  padding: 6px 2px;
+  border-bottom: 1px solid var(--borde, #e5e7eb);
+}
+.fila-grupos-lista > .boton-texto-chico { min-width: 190px; text-align: left; font-weight: 700; }
+
+/* Horarios → Horas libres: cuadro general (una tabla por día, todos los
+   docentes). Verde = franja sin clase asignada. */
+.titulo-dia-libres { margin: 16px 0 6px; font-size: 15px; }
+.tabla-horas-libres { width: 100%; border-collapse: collapse; font-size: 11px; }
+.tabla-horas-libres th {
+  background: #1f3a5f;
+  color: #fff;
+  font-weight: 600;
+  padding: 4px 5px;
+  text-align: center;
+  border: 1px solid #1f3a5f;
+}
+.tabla-horas-libres th .hl-hora { font-weight: 400; font-size: 9px; opacity: 0.85; }
+.tabla-horas-libres td {
+  padding: 3px 5px;
+  text-align: center;
+  border: 1px solid #d3d9e2;
+  white-space: nowrap;
+}
+.tabla-horas-libres .col-doc { text-align: left; min-width: 180px; }
+.tabla-horas-libres tr.par td { background: #f5f7fa; }
+.tabla-horas-libres td.hl-libre { background: #dcfce7; color: #166534; font-weight: 700; }
+.tabla-horas-libres tr.par td.hl-libre { background: #cdf0d8; }
+.tabla-horas-libres td.tot { background: #eef2f7; font-weight: 700; color: #1f3a5f; }
+
+/* Horas libres, formato "una fila por hora": cada hora es una banda (mismo
+   fondo, sin líneas internas), con los nombres en columnas alineadas. */
+.tabla-horas-libres td.hl-franja { font-weight: 700; color: #1f3a5f; white-space: nowrap; }
+.tabla-horas-libres td.hl-nombres,
+.tabla-horas-libres td.hl-franja,
+.tabla-horas-libres td.hl-cuenta { border-left: none; border-right: none; vertical-align: top; }
+.tabla-horas-libres td.hl-nombres { white-space: normal; min-width: 340px; padding: 4px 6px; }
+.tabla-horas-libres .hl-nadie { color: #9a3412; font-style: italic; }
+.hl-lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  columns: 3;
+  column-gap: 18px;
+}
+.hl-lista li { padding: 1px 0; break-inside: avoid; font-size: 11px; }
+@media (max-width: 900px) { .hl-lista { columns: 2; } }
+@media (max-width: 600px) { .hl-lista { columns: 1; } }
+
+/* Nivel del docente en Horas libres: P primaria, S secundaria, P·S los dos. */
+.hl-nivel {
+  font-size: 9px;
+  font-weight: 700;
+  color: #64748b;
+  background: #eef2f7;
+  border-radius: 3px;
+  padding: 0 3px;
+}

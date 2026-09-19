@@ -22,6 +22,20 @@ function fechaColombiaISO(instante = new Date()) {
   return `${partes.year}-${partes.month}-${partes.day}`;
 }
 
+// Convierte un instante que devuelve la API ("2026-09-17T16:56:08.849073") en
+// un Date. El backend guarda y envía los instantes en UTC SIN zona (ver
+// fechas.ahora_utc), y JavaScript interpreta una fecha-hora sin sufijo como
+// hora LOCAL: en Colombia eso la corre 5 horas hacia adelante. Es el mismo
+// error que ya costó las fechas de ficha.js en Fase 1, al revés.
+// Devuelve null si el texto no sirve, para que quien llame decida qué hacer.
+function instanteUtcDesdeApi(texto) {
+  if (!texto) return null;
+  // Si ya trae zona ("Z" o "+05:00"), se respeta tal cual.
+  const conZona = /(?:Z|[+-]\d{2}:?\d{2})$/.test(texto);
+  const fecha = new Date(conZona ? texto : `${texto}Z`);
+  return Number.isNaN(fecha.getTime()) ? null : fecha;
+}
+
 // Escapa texto para interpolarlo en HTML (innerHTML / plantillas). Todo texto
 // escrito por usuarios o traído de importaciones debe pasar por aquí.
 function esc(valor) {
@@ -34,6 +48,11 @@ function esc(valor) {
 }
 
 async function api(path, opciones = {}) {
+  // Fase 4A': si al token de acceso le queda poco, se renueva ANTES de salir
+  // (ver asegurarSesionFresca en auth.js). El 401 de más abajo se conserva
+  // como red de seguridad — esto solo evita llegar a él.
+  await asegurarSesionFresca();
+
   let res = await fetch(path, {
     headers: { "Content-Type": "application/json" },
     ...opciones,

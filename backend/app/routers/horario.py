@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
-from .. import fechas, horario, rbac, reporte_horario, schemas
+from .. import fechas, horario, rbac, reporte_horario, reporte_horas_libres, schemas
 from ..database import get_db
 
 router = APIRouter(prefix="/api/horario", tags=["horario"])
@@ -98,6 +98,44 @@ def reporte_horario_word(
 
 
 # --- Abrir hueco / asignar una clase nueva --------------------------------
+
+
+@router.get("/horas-libres", response_model=schemas.HorasLibresReporte)
+def horas_libres(
+    anio_lectivo: int | None = None,
+    _obs=Depends(rbac.observar("horario.ver")),
+    db: Session = Depends(get_db),
+):
+    """Cuadro general: cada docente, hora por hora, qué dicta o si está libre."""
+    return reporte_horas_libres.calcular(db, anio_lectivo or fechas.anio_lectivo_actual())
+
+
+@router.get("/horas-libres.pdf")
+def horas_libres_pdf(
+    anio_lectivo: int | None = None,
+    dias: str = "",  # "1,2,3" — vacío = toda la semana
+    solo_libres: bool = False,
+    formato: str = "cuadro",  # cuadro | por_hora
+    _obs=Depends(rbac.observar("horario.ver")),
+    db: Session = Depends(get_db),
+):
+    lista_dias = [int(d) for d in dias.split(",") if d.strip().isdigit()] or None
+    try:
+        datos = reporte_horas_libres.generar_pdf(
+            db,
+            anio_lectivo or fechas.anio_lectivo_actual(),
+            dias=lista_dias,
+            solo_libres=solo_libres,
+            formato=formato,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    nombre = f"horas_libres_docentes_{dt.date.today().isoformat()}.pdf"
+    return Response(
+        content=datos,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{nombre}"'},
+    )
 
 
 @router.get("/huecos", response_model=schemas.HuecosRespuesta)

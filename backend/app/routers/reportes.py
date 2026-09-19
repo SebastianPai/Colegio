@@ -17,6 +17,10 @@ class ListaEstudiantesPdfSolicitud(BaseModel):
     vista: str = "activos"  # activos | posibles | retirados
     sede_nombre: str = ""
     desde_grado: int = 0
+    hasta_grado: int = 11
+    grupos_txt: str = ""  # "Cuarto - Dos, Sexto - Cuatro" si se escogieron grupos
+    incluye_posibles: bool = False
+    incluye_retirados: bool = False
     cantidad: int | None = None  # cupo pedido (solo vista activos)
     completo: bool = False  # True = alcanzaron todos, el cupo no cortó la lista
     sin_grupo_excluidos: int = 0  # cuántos se dejaron fuera por no tener grupo
@@ -36,6 +40,10 @@ def lista_estudiantes_pdf_endpoint(
             vista=solicitud.vista,
             sede_nombre=solicitud.sede_nombre,
             desde_grado=solicitud.desde_grado,
+            hasta_grado=solicitud.hasta_grado,
+            grupos_txt=solicitud.grupos_txt,
+            incluye_posibles=solicitud.incluye_posibles,
+            incluye_retirados=solicitud.incluye_retirados,
             cantidad=solicitud.cantidad,
             completo=solicitud.completo,
             sin_grupo_excluidos=solicitud.sin_grupo_excluidos,

@@ -65,7 +65,22 @@ async function _intentarRefresh() {
   _refrescoEnCurso = (async () => {
     try {
       const res = await _fetchCrudo("/api/auth/refresh", { method: "POST" });
-      return res.ok;
+      if (!res.ok) return false;
+      // Fase 4A': antes el cuerpo se descartaba. Trae el expira_acceso_en
+      // nuevo, y sin él asegurarSesionFresca() seguiría creyendo que la
+      // cookie está por vencer y refrescaría en cada llamada.
+      const sesion = await res.json().catch(() => null);
+      if (sesion) {
+        if (sesionActual) {
+          sesionActual.expira_acceso_en = sesion.expira_acceso_en;
+          sesionActual.sesion = sesion.sesion;
+        } else {
+          // Refresh durante el arranque (iniciarApp aún no tiene sesión):
+          // _obtenerYo la reemplaza enseguida por la versión definitiva.
+          sesionActual = sesion;
+        }
+      }
+      return true;
     } catch {
       return false; // sin red: se trata igual que un refresh fallido
     } finally {
@@ -73,6 +88,57 @@ async function _intentarRefresh() {
     }
   })();
   return _refrescoEnCurso;
+}
+
+// --- Fase 4A': mantener viva la cookie de acceso ----------------------------
+// El token de acceso dura 15 minutos. Hasta ahora solo se renovaba al recibir
+// un 401, pero en modo observación NINGUNA ruta devuelve 401: pasados esos 15
+// minutos, cada petición llegaba al servidor sin identidad y quedaba
+// registrada como "sin sesión" aunque la persona sí estuviera dentro (42 % de
+// las observaciones). Y hay peticiones que nunca podrían aprovechar ese 401:
+// las descargas por navegación, las imágenes de documentos escaneados y los
+// <a href> — ahí no hay JavaScript que pueda interceptar nada.
+//
+// La solución es no llegar nunca a que venza: se renueva ANTES, tanto por
+// temporizador como justo antes de cada petición.
+
+const MARGEN_REFRESCO_MS = 6 * 60 * 1000;  // renovar cuando queden 6 min o menos
+const INTERVALO_KEEPALIVE_MS = 5 * 60 * 1000;  // revisar cada 5 min
+// El intervalo DEBE ser menor que el margen: si no, una revisión podría
+// saltarse la ventana y encontrar la cookie ya vencida. 5 < 6 < 15.
+
+let _temporizadorKeepAlive = null;
+
+function _accesoPorVencer() {
+  const vence = instanteUtcDesdeApi(sesionActual?.expira_acceso_en);
+  if (vence === null) return false; // sin dato fiable, no forzar un refresh
+  return vence.getTime() - Date.now() <= MARGEN_REFRESCO_MS;
+}
+
+// Renueva el token de acceso si está por vencer. Devuelve true si al salir
+// hay sesión utilizable. La usan api() (comun.js), las subidas con FormData y
+// las descargas por navegación, que no pasan por api().
+async function asegurarSesionFresca() {
+  if (!sesionActual) return false; // sin sesión no hay nada que refrescar
+  if (!_accesoPorVencer()) return true;
+  return _intentarRefresh();
+}
+
+function _arrancarKeepAlive() {
+  _detenerKeepAlive();
+  _temporizadorKeepAlive = setInterval(() => {
+    // Con la pestaña oculta el navegador frena los temporizadores y no vale
+    // la pena gastar peticiones: al volver a mostrarse se revisa enseguida
+    // (ver el listener de visibilitychange).
+    if (document.visibilityState === "visible") asegurarSesionFresca();
+  }, INTERVALO_KEEPALIVE_MS);
+}
+
+function _detenerKeepAlive() {
+  if (_temporizadorKeepAlive !== null) {
+    clearInterval(_temporizadorKeepAlive);
+    _temporizadorKeepAlive = null;
+  }
 }
 
 // GET /api/auth/yo con UN refresh-si-hace-falta (mismo mecanismo que usará
@@ -134,6 +200,7 @@ async function _continuarConSesion(sesion) {
   _actualizarCuentaUsuario(sesion.usuario);
   _aplicarVisibilidadPorPermisos(sesion.usuario.permisos);
   _mostrarApp();
+  _arrancarKeepAlive(); // Fase 4A': que la cookie de acceso no venza en uso
   // main.js define iniciarNavegacion(): aplica los parámetros de la URL y
   // llama a render() — exactamente la misma lógica que ya existía, solo que
   // ahora se ejecuta después de confirmar la sesión en vez de al cargar el
@@ -142,6 +209,7 @@ async function _continuarConSesion(sesion) {
 }
 
 function _sesionExpirada() {
+  _detenerKeepAlive();
   sesionActual = null;
   resetearEstadoNavegacion();
   document.getElementById("login-error").hidden = true;
@@ -257,6 +325,7 @@ async function _manejarLogout() {
     // dejar a alguien "atrapado" en la app porque el logout no pudo avisar
     // al servidor.
   }
+  _detenerKeepAlive();
   sesionActual = null;
   resetearEstadoNavegacion();
   document.getElementById("login-aviso-sesion").hidden = true;
@@ -269,3 +338,11 @@ document.getElementById("form-login").addEventListener("submit", _manejarSubmitL
 document.getElementById("form-cambiar-clave").addEventListener("submit", _manejarSubmitCambiarClave);
 document.getElementById("btn-logout").addEventListener("click", _manejarLogout);
 document.getElementById("btn-reintentar-conexion").addEventListener("click", iniciarApp);
+
+// Fase 4A': al volver a una pestaña que estuvo oculta (portátil cerrado, otra
+// pestaña al frente), el navegador tuvo frenado el temporizador y la cookie
+// pudo vencerse mientras tanto. Se revisa de inmediato, antes de que la
+// persona alcance a hacer clic en nada.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") asegurarSesionFresca();
+});

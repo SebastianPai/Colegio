@@ -1139,7 +1139,10 @@ function pintarReporteNotas(contenedor, r, sedes) {
   document.getElementById("input-umbral-alto").addEventListener("change", recalcular);
   document.getElementById("input-riesgo-minimo").addEventListener("change", recalcular);
 
-  document.getElementById("btn-exportar-reporte-notas").addEventListener("click", () => {
+  document.getElementById("btn-exportar-reporte-notas").addEventListener("click", async () => {
+    // Fase 4A': la descarga la hace el navegador, no api(): si el token de
+    // acceso venciera, aquí no habría forma de renovarlo ni de reintentar.
+    await asegurarSesionFresca();
     window.location.href = `/api/boletines/reporte-notas/exportar?${urlReporteNotasParams()}`;
   });
 }
@@ -2175,7 +2178,8 @@ function pintarInformeContinuidad(contenedor, r, sedes) {
     continuidadSedeSeleccionada = Number(e.target.value);
     cargarYPintarContinuidad(contenedor, sedes);
   });
-  document.getElementById("btn-exportar-continuidad").addEventListener("click", () => {
+  document.getElementById("btn-exportar-continuidad").addEventListener("click", async () => {
+    await asegurarSesionFresca(); // Fase 4A': ver la nota en btn-exportar-reporte-notas
     window.location.href = `/api/boletines/continuidad/exportar?sede_id=${continuidadSedeSeleccionada}&anio_lectivo=${filtroBoletinesAnio}`;
   });
 }
@@ -2321,6 +2325,10 @@ function renderSapredImportar(contenedor, sedes) {
       const form = new FormData();
       form.append("archivo", archivo);
       try {
+        // Fase 4A': va por fetch crudo (manda un archivo, no JSON), así que
+        // no pasa por api(). Se renueva aquí, dentro del bucle: importar
+        // muchos PDF puede tomar más de los 15 minutos que dura el token.
+        await asegurarSesionFresca();
         const res = await fetch("/api/boletines/importar-sapred", { method: "POST", body: form });
         if (!res.ok) {
           const cuerpo = await res.json().catch(() => ({}));
@@ -2363,6 +2371,7 @@ function renderSapredImportar(contenedor, sedes) {
       const form = new FormData();
       form.append("archivo", archivo);
       try {
+        await asegurarSesionFresca(); // Fase 4A': ver la nota en importar-sapred
         const res = await fetch("/api/boletines/importar-boletin", { method: "POST", body: form });
         if (!res.ok) {
           const cuerpo = await res.json().catch(() => ({}));

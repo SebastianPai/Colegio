@@ -177,10 +177,30 @@ function _mostrarApp() {
 // --- UX por permisos (NUNCA seguridad: el backend es quien decide de verdad,
 // a partir de Fase 4B) -------------------------------------------------------
 
+// Módulos que el administrador puede apagar (GET /api/sistema/modulos; ver
+// backend/app/configuracion.py). Si no se pudo consultar, se asume encendido.
+let modulosSistema = { orientacion: true };
+
+async function cargarModulosSistema() {
+  try {
+    modulosSistema = await api("/api/sistema/modulos");
+  } catch {
+    modulosSistema = { orientacion: true };
+  }
+}
+
 function _aplicarVisibilidadPorPermisos(permisos) {
   const lista = permisos || [];
   document.querySelectorAll("[data-permiso]").forEach((el) => {
-    el.hidden = !lista.includes(el.dataset.permiso);
+    const moduloApagado = el.dataset.vista === "orientacion" && modulosSistema.orientacion === false;
+    el.hidden = !lista.includes(el.dataset.permiso) || moduloApagado;
+  });
+  // Un grupo del menú (ej. "Gestión") sin NINGÚN botón visible (ni siquiera
+  // un "Próximamente") se oculta completo, para no dejar un título suelto
+  // sin nada debajo.
+  document.querySelectorAll(".nav-grupo").forEach((grupo) => {
+    const algunoVisible = Array.from(grupo.querySelectorAll(".tab, .tab-proximamente")).some((el) => !el.hidden);
+    grupo.hidden = !algunoVisible;
   });
 }
 
@@ -198,6 +218,7 @@ async function _continuarConSesion(sesion) {
     return;
   }
   _actualizarCuentaUsuario(sesion.usuario);
+  await cargarModulosSistema();
   _aplicarVisibilidadPorPermisos(sesion.usuario.permisos);
   _mostrarApp();
   _arrancarKeepAlive(); // Fase 4A': que la cookie de acceso no venza en uso

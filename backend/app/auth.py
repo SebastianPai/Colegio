@@ -269,14 +269,25 @@ def iniciar_sesion(
     Devuelve (sesion, token_renovacion, token_acceso, expira_acceso)."""
     ahora = fechas.ahora_utc()
 
-    dispositivo = None
-    if dispositivo_id:
-        dispositivo = db.get(models.Dispositivo, dispositivo_id)
-        if dispositivo is not None and dispositivo.usuario_id != usuario.id:
-            dispositivo = None  # ese id es de otra persona: se genera uno nuevo
-    if dispositivo is None:
+    dispositivo_existente = db.get(models.Dispositivo, dispositivo_id) if dispositivo_id else None
+
+    if dispositivo_existente is not None and dispositivo_existente.usuario_id == usuario.id:
+        dispositivo = dispositivo_existente
+        dispositivo.ultimo_acceso = ahora
+        dispositivo.ultima_ip = ip or dispositivo.ultima_ip
+        dispositivo.confiable = bool(confiar)
+        dispositivo.revocado_en = None
+        if nombre_dispositivo:
+            dispositivo.nombre = nombre_dispositivo.strip()
+    else:
+        # Sin id, o el id que llegó ya es de OTRA persona (mismo navegador,
+        # otra cuenta ya inició sesión ahí antes): no se reutiliza ese id
+        # como string, porque dispositivos.id es su clave primaria y chocaría
+        # con la fila ajena (bug real detectado 22/09/2026: producía un 500
+        # en /api/auth/login al cambiar de cuenta en el mismo navegador).
+        id_reutilizable = dispositivo_id and len(dispositivo_id) <= 64 and dispositivo_existente is None
         dispositivo = models.Dispositivo(
-            id=dispositivo_id if dispositivo_id and len(dispositivo_id) <= 64 else str(uuid.uuid4()),
+            id=dispositivo_id if id_reutilizable else str(uuid.uuid4()),
             usuario_id=usuario.id,
             nombre=(nombre_dispositivo or "").strip() or _nombre_de_dispositivo(user_agent),
             confiable=confiar,
@@ -284,13 +295,6 @@ def iniciar_sesion(
             ultimo_acceso=ahora,
         )
         db.add(dispositivo)
-    else:
-        dispositivo.ultimo_acceso = ahora
-        dispositivo.ultima_ip = ip or dispositivo.ultima_ip
-        dispositivo.confiable = bool(confiar)
-        dispositivo.revocado_en = None
-        if nombre_dispositivo:
-            dispositivo.nombre = nombre_dispositivo.strip()
 
     if confiar:
         expira = ahora + dt.timedelta(days=seguridad.DIAS_SESION_CONFIABLE)

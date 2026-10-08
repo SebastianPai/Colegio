@@ -132,6 +132,9 @@ def asegurar_columnas_sqlite() -> None:
         if "retirado" not in columnas:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE estudiantes ADD COLUMN retirado BOOLEAN DEFAULT 0 NOT NULL"))
+        if "resguardo" not in columnas:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE estudiantes ADD COLUMN resguardo BOOLEAN DEFAULT 1 NOT NULL"))
 
     if "fotos_estudiante" in tablas:
         columnas_info = {c["name"]: c for c in inspector.get_columns("fotos_estudiante")}
@@ -194,6 +197,36 @@ def asegurar_columnas_sqlite() -> None:
                 "asignaciones_docente", ["id", "docente_id", "sede_id", "grado", "curso", "anio_lectivo"]
             )
 
+    if "diagnosticos_observaciones" in tablas:
+        columnas = {c["name"] for c in inspector.get_columns("diagnosticos_observaciones")}
+        if "estado" not in columnas:
+            # Nace la entidad Caso (antes era una nota plana): además de
+            # columnas nuevas, estudiante_id pasa a ser NOT NULL (un caso
+            # siempre es de un estudiante puntual) — SQLite no deja quitar
+            # ni poner NOT NULL con ALTER TABLE, así que se reconstruye. La
+            # tabla nace vacía en producción (se verificó antes de este
+            # cambio), así que no hay filas que pudieran violar el NOT NULL.
+            reconstruir_tabla(
+                "diagnosticos_observaciones",
+                [
+                    "id", "sede_id", "grado", "curso", "estudiante_id", "categoria", "titulo", "detalle",
+                    "fecha", "autor_usuario_id", "creado_en",
+                ],
+            )
+
+    if "diagnosticos_mencion" in tablas:
+        columnas = {c["name"] for c in inspector.get_columns("diagnosticos_mencion")}
+        nuevas = {
+            "confianza": "ALTER TABLE diagnosticos_mencion ADD COLUMN confianza VARCHAR(10) DEFAULT 'alta' NOT NULL",
+            "texto_compartido": "ALTER TABLE diagnosticos_mencion ADD COLUMN texto_compartido BOOLEAN DEFAULT 0 NOT NULL",
+            "candidatos_json": "ALTER TABLE diagnosticos_mencion ADD COLUMN candidatos_json TEXT",
+        }
+        faltantes = [sql for col, sql in nuevas.items() if col not in columnas]
+        if faltantes:
+            with engine.begin() as conn:
+                for sql in faltantes:
+                    conn.execute(text(sql))
+
     if "bloques_horario" in tablas:
         columnas = {c["name"] for c in inspector.get_columns("bloques_horario")}
         nuevas = {
@@ -240,6 +273,50 @@ def reparar_claves_foraneas_rotas() -> list[str]:
         _log(f"{nombre}: clave foránea hacia tabla inexistente {faltantes} → se recrea")
         reconstruir_tabla(nombre, columnas)
     return [nombre for nombre, _, _ in rotas]
+
+
+# --- 3b. Tabla 'asistencias': esquema viejo -> esquema por bloque -----------
+
+
+def _migrar_tabla_asistencias_v2() -> bool:
+    """`asistencias` tenía un esquema mínimo (id, estudiante_id, fecha,
+    presente, registrado_en): sin autor, sin bloque, sin historial, y
+    confirmado con 0 filas en producción (el módulo nunca se usó). El
+    esquema nuevo (asistencia por bloque de horario, con auditoría) es
+    incompatible columna a columna, así que se recrea la tabla en vez de
+    migrar datos — pero SOLO si de verdad sigue vacía; si alguna vez llega a
+    tener filas, esto se detiene y avisa en vez de inventar en qué docente o
+    bloque repartirlas."""
+    inspector = inspect(engine)
+    if "asistencias" not in inspector.get_table_names():
+        return False
+    columnas = {c["name"] for c in inspector.get_columns("asistencias")}
+    if "uuid_cliente" in columnas:
+        return False  # ya está en el esquema nuevo
+
+    with engine.connect() as conn:
+        total = conn.execute(text("SELECT COUNT(*) FROM asistencias")).scalar_one()
+    if total > 0:
+        raise RuntimeError(
+            f"La tabla 'asistencias' tiene {total} fila(s) con el esquema viejo "
+            "(sin autor/bloque/estado). No se recrea sola para no perder datos: "
+            "hace falta decidir a mano cómo repartirlas en las columnas nuevas."
+        )
+
+    respaldar("antes_recrear_asistencias_v2")
+    raw = engine.raw_connection()
+    try:
+        con = raw.driver_connection
+        nivel_previo = con.isolation_level
+        con.isolation_level = None
+        con.execute("PRAGMA foreign_keys=OFF")
+        con.execute("DROP TABLE asistencias")
+        con.execute("PRAGMA foreign_keys=ON")
+        con.isolation_level = nivel_previo
+    finally:
+        raw.close()
+    _log("tabla 'asistencias' (vacía) recreada con el esquema nuevo — asistencia por bloque de horario")
+    return True
 
 
 # --- 4. Índices ---------------------------------------------------------------
@@ -470,10 +547,39 @@ def sembrar_roles_sistema() -> list[str]:
     return creados
 
 
+def otorgar_permisos_nuevos(permisos_nuevos: list[str]) -> list[str]:
+    """Cuando un permiso APARECE por primera vez en el catálogo, se le da a
+    los roles del sistema que ya existían y que lo traen en su definición
+    (sembrar_roles_sistema no toca roles existentes). Solo corre para los
+    códigos recién creados — o sea, una única vez por permiso —, así nunca
+    revierte que el administrador se lo haya quitado después a un rol."""
+    if not permisos_nuevos:
+        return []
+    otorgados: list[str] = []
+    with Session(engine) as db:
+        permisos = {p.codigo: p for p in db.scalars(select(models.Permiso).where(models.Permiso.codigo.in_(permisos_nuevos)))}
+        for definicion in permisos_catalogo.ROLES_SISTEMA:
+            rol = db.scalar(select(models.Rol).where(models.Rol.codigo == definicion.codigo))
+            if rol is None:
+                continue
+            ya = set(db.scalars(select(models.RolPermiso.permiso_id).where(models.RolPermiso.rol_id == rol.id)))
+            for codigo in permisos_nuevos:
+                p = permisos.get(codigo)
+                if p is not None and codigo in definicion.permisos and p.id not in ya:
+                    db.add(models.RolPermiso(rol_id=rol.id, permiso_id=p.id))
+                    otorgados.append(f"{definicion.codigo}:{codigo}")
+        db.commit()
+    if otorgados:
+        _log(f"permisos nuevos otorgados a roles existentes: {', '.join(otorgados)}")
+    return otorgados
+
+
 # --- Punto de entrada ---------------------------------------------------------------
 
 
 def ejecutar() -> dict[str, list[str]]:
+    _migrar_tabla_asistencias_v2()
+
     # Si el modelo trae tablas nuevas y la base ya está en uso, se respalda
     # antes de tocarla (crear tablas no borra nada, pero el respaldo deja un
     # punto de retorno claro para cada cambio de estructura).
@@ -491,6 +597,7 @@ def ejecutar() -> dict[str, list[str]]:
     indices = asegurar_indices()
     permisos_nuevos = sincronizar_catalogo_permisos()
     roles_nuevos = sembrar_roles_sistema()
+    otorgar_permisos_nuevos(permisos_nuevos)
     sembrar_areas_secundaria()
     sembrar_areas_primaria_confirmadas()
     backfill_pendientes_legacy()

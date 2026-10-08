@@ -192,7 +192,7 @@ def franja_actual(ahora: dt.datetime | None = None) -> dict:
 # --- Consultas de horario ----------------------------------------------------
 
 
-def _dia_de_fecha(fecha: dt.date) -> int | None:
+def dia_de_fecha(fecha: dt.date) -> int | None:
     wd = fecha.weekday()
     return wd + 1 if wd < 5 else None
 
@@ -534,7 +534,7 @@ def estado_docentes(db: Session, fecha: dt.date, ahora: dt.datetime | None = Non
 
 
 def clases_afectadas(db: Session, docente_id: int, fecha: dt.date) -> list[schemas.ClaseAfectada]:
-    dia = _dia_de_fecha(fecha)
+    dia = dia_de_fecha(fecha)
     if dia is None:
         return []
     bloques = db.scalars(
@@ -659,7 +659,7 @@ def registrar_ausencia(db: Session, datos: schemas.AusenciaCrear) -> schemas.Aus
     # OJO: si el bloque está en conflicto (dos docentes para ese grupo+hora),
     # NO se crea el pendiente todavía — primero hay que confirmar de quién es la
     # clase (ver clases_afectadas[].conflicto y resolver_conflicto).
-    dia = _dia_de_fecha(fecha)
+    dia = dia_de_fecha(fecha)
     if dia is not None:
         conflictos = _slots_en_conflicto(db, fecha.year)
         bloques = db.scalars(
@@ -1312,7 +1312,7 @@ def resolver_conflicto(db: Session, datos: schemas.ResolverConflicto) -> dict:
                 models.AusenciaDocente.docente_id == oficial.docente_id
             )
         ):
-            if _dia_de_fecha(aus.fecha) != datos.dia or aus.fecha.year != datos.anio_lectivo:
+            if dia_de_fecha(aus.fecha) != datos.dia or aus.fecha.year != datos.anio_lectivo:
                 continue
             ya = db.scalar(
                 select(models.Reemplazo).where(
@@ -1357,7 +1357,7 @@ def panel_hoy(db: Session, fecha: dt.date, ahora: dt.datetime | None = None) -> 
             else dt.datetime.combine(fecha, ahora_col.time())
         )
     fr = franja_actual(ahora)
-    dia = _dia_de_fecha(fecha)
+    dia = dia_de_fecha(fecha)
 
     estados = estado_docentes(db, fecha, ahora)
     conteo: dict[str, int] = {}

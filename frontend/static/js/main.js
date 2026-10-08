@@ -30,6 +30,20 @@ function iniciarNavegacion() {
     document.querySelector(`[data-vista="${vistaActual === "ficha" ? "estudiantes" : vistaActual}"]`)?.classList.add("activo");
   })();
 
+  // vistaActual arranca en "sedes" por defecto (o en lo que traiga la URL)
+  // para TODOS, sin mirar el rol — ocultar el botón del menú no basta si la
+  // vista igual se renderiza sola al entrar. Si la vista actual no es una de
+  // las que el usuario puede ver, se cae a su primera pestaña permitida.
+  const vistaPermitida = (v) => !!document.querySelector(`.tab[data-vista="${v}"]:not([hidden])`);
+  if (vistaActual !== "ficha" && !vistaPermitida(vistaActual)) {
+    const primeraPermitida = document.querySelector(".sidebar-nav .tab[data-vista]:not([hidden])");
+    if (primeraPermitida) {
+      tabs.forEach((t) => t.classList.remove("activo"));
+      vistaActual = primeraPermitida.dataset.vista;
+      primeraPermitida.classList.add("activo");
+    }
+  }
+
   render();
 }
 

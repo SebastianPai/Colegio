@@ -1,4 +1,22 @@
-// --- Vista: Ficha del estudiante (fotos + constancia) -----------------------
+// --- Vista: detalle del estudiante -------------------------------------------
+//
+// Estructura (rediseño UX): una cabecera de identidad fija + 5 subvistas
+//
+//   Resumen · Datos · Documentos · Matrícula oficial · Constancias
+//
+// en vez de los 6 <details> apilados que había antes. Cada subvista pinta
+// sólo su panel; el estado de cuál está activa vive en fichaSub y sobrevive
+// a los renderFicha() que disparan los guardados y las subidas.
+//
+// IMPORTANTE — LA FICHA OFICIAL NO SE TOCA. El documento vive en
+// static/ficha_matricula.html (generado de la plantilla Word por
+// herramientas/generar_html_ficha.py) y se inyecta tal cual en
+// #ficha-contenedor. Aquí sólo cambia DÓNDE se muestra: ahora dentro de un
+// visor a pantalla completa (#ficha-visor) en vez de en medio del scroll.
+// La hoja se sigue cargando SIEMPRE en el DOM aunque el visor esté cerrado,
+// porque descargarFicha()/imprimirFicha()/guardarDatosFicha() leen los
+// valores de "#ficha-hoja input": si sólo se cargara al abrir el visor,
+// descargar el Word desde otra pestaña generaría una ficha vacía.
 
 const TIPOS_DOCUMENTO_TEXTO = {
   "C.C.": "Cédula de ciudadanía",
@@ -59,6 +77,348 @@ function previsualizarConstancia(e, nombreCompleto, datos) {
       </div>
     </div>
   `;
+}
+
+// Valores iniciales de la ficha de matrícula: lo que ya sabemos del estudiante.
+function valoresInicialesFicha(e) {
+  const fn = e.fecha_nacimiento ? new Date(`${e.fecha_nacimiento}T00:00:00`) : null;
+  const hoy = new Date();
+  return {
+    nombres: [e.primer_nombre, e.segundo_nombre].filter(Boolean).join(" "),
+    primer_apellido: e.primer_apellido || "",
+    segundo_apellido: e.segundo_apellido || "",
+    dia_nac: fn ? String(fn.getDate()) : "",
+    mes_nac: fn ? (MESES_TEXTO[fn.getMonth() + 1] || "").toUpperCase() : "",
+    anio_nac: fn ? String(fn.getFullYear()) : "",
+    numero_documento: e.documento || "",
+    municipio_expedicion: e.lugar_expedicion_documento || "",
+    sexo_m: e.genero === "M" ? "X" : "",
+    sexo_f: e.genero === "F" ? "X" : "",
+    grado_2025: String(e.grado), // "GRADO AÑO 2026": el grado de hoy, en número (Preescolar = 0)
+    est_antiguo: "X",
+    docente: (typeof sesionActual !== "undefined" && sesionActual?.usuario?.nombre) || "",
+    dilig_dia: String(hoy.getDate()),
+    dilig_mes: (MESES_TEXTO[hoy.getMonth() + 1] || "").toUpperCase(),
+    dilig_anio: String(hoy.getFullYear()),
+  };
+}
+
+// --- Promoción: rendimiento del año + permiso de coordinación ----------------
+// Regla (backend/app/promocion.py): aprobó → sube UN grado (0 → 1, no 0 → 2);
+// repite → mismo grado. Subir con materias perdidas, saltar o bajar de grado
+// necesita permiso APROBADO de coordinación: mientras no lo haya, esta
+// pantalla no deja generar ni imprimir la ficha con ese grado (y el backend
+// lo vuelve a verificar al generar — la pantalla no es la que manda).
+let riesgoFicha = null; // RiesgoPromocion: notas del año por materia, con su docente
+let evaluacionFicha = null; // EvaluacionPromocion del grado escrito en la ficha
+let estudiantePromocion = null;
+let _evaluarFichaTimer = null;
+
+const MOTIVOS_PROMOCION = {
+  perdidas: "sube de grado con materias perdidas",
+  salto: "salta grados (lo normal es subir uno)",
+  retroceso: "baja de grado",
+};
+
+function nombreGradoFicha(g) {
+  return (NOMBRES_GRADOS.find(([n]) => n === g) || [g, `Grado ${g}`])[1];
+}
+
+function gradoDestinoFicha() {
+  const v = document.querySelector('#ficha-hoja input[name="grado_2026"]')?.value || "";
+  const m = v.match(/\d+/);
+  return m ? Number(m[0]) : null;
+}
+
+function fechaHoraFicha(t) {
+  const f = instanteUtcDesdeApi(t);
+  return f ? f.toLocaleString("es-CO", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+}
+
+// Tabla de rendimiento: primero lo perdido y en riesgo, lo aprobado plegado.
+function rendimientoFichaHtml(r) {
+  if (!r.areas_evaluadas) {
+    return `<div class="prom-caja prom-neutra">${icono("info")}<div>No hay notas de ${r.anio_lectivo} en el sistema para este estudiante: no se puede verificar si lleva materias perdidas.</div></div>`;
+  }
+  const periodos = r.periodos_con_notas;
+  const materias = r.materias && r.materias.length ? r.materias : r.perdidas;
+  const perdidas = materias.filter((m) => m.estado === "perdida");
+  const riesgo = materias.filter((m) => m.estado === "en_riesgo");
+  const aprobadas = materias.filter((m) => m.estado === "aprobada");
+  const ESTADO = {
+    perdida: '<span class="badge-estado alerta">Perdida</span>',
+    en_riesgo: '<span class="badge-estado proceso">En riesgo</span>',
+    aprobada: '<span class="badge-estado ok">Aprobada</span>',
+  };
+  const fila = (m) => `
+    <tr class="prom-fila-${m.estado}">
+      <td><strong>${esc(m.area_nombre)}</strong></td>
+      <td>${m.docente_nombre ? `${icono("user", "ico-tenue")}${esc(m.docente_nombre)}` : '<span class="prom-tenue">Sin docente asignado</span>'}</td>
+      ${periodos
+        .map((p) => {
+          const n = m.notas.find((x) => x.periodo === p);
+          return `<td class="prom-num${n && n.valor < r.nota_minima ? " prom-nota-baja" : ""}">${n ? n.valor.toFixed(1) : "—"}</td>`;
+        })
+        .join("")}
+      <td class="prom-num"><strong>${m.promedio.toFixed(2)}</strong></td>
+      <td>${ESTADO[m.estado] || ""}</td>
+    </tr>`;
+  const cabecera = `<thead><tr><th>Materia</th><th>Docente</th>${periodos.map((p) => `<th class="prom-num">P${p}</th>`).join("")}<th class="prom-num">Promedio</th><th>Estado</th></tr></thead>`;
+  const resumen = perdidas.length
+    ? `<span class="prom-dato prom-dato-alerta">${icono("circle-x")}${perdidas.length} perdida${perdidas.length === 1 ? "" : "s"}</span>`
+    : `<span class="prom-dato prom-dato-ok">${icono("circle-check")}Ninguna perdida</span>`;
+  return `
+    <section class="prom-rendimiento">
+      <header>
+        <h4>${icono("book-open")}Rendimiento ${r.anio_lectivo}</h4>
+        <div class="prom-datos">
+          ${resumen}
+          ${riesgo.length ? `<span class="prom-dato prom-dato-aviso">${icono("triangle-alert")}${riesgo.length} en riesgo</span>` : ""}
+          <span class="prom-dato">${materias.length} evaluadas · períodos ${periodos.join(", ")}</span>
+        </div>
+      </header>
+      <p class="prom-regla">Perdida = promedio menor a ${r.nota_minima.toFixed(1)} (una sola materia perdida = año perdido). En riesgo = promedio menor a ${(r.nota_minima + 0.5).toFixed(1)}.</p>
+      ${
+        perdidas.length || riesgo.length
+          ? `<div class="tabla-scroll"><table class="prom-tabla">${cabecera}<tbody>${[...perdidas, ...riesgo].map(fila).join("")}</tbody></table></div>`
+          : ""
+      }
+      ${
+        aprobadas.length
+          ? `<details class="prom-aprobadas"${perdidas.length || riesgo.length ? "" : " open"}><summary>Ver ${perdidas.length || riesgo.length ? "las " : ""}${aprobadas.length} materia${aprobadas.length === 1 ? "" : "s"} aprobada${aprobadas.length === 1 ? "" : "s"}</summary>
+              <div class="tabla-scroll"><table class="prom-tabla">${cabecera}<tbody>${aprobadas.map(fila).join("")}</tbody></table></div></details>`
+          : ""
+      }
+    </section>`;
+}
+
+// Estado del grado escrito en la ficha: corresponde, o hace falta permiso
+// (pedirlo / pendiente / autorizado / rechazado).
+function estadoPromocionHtml(ev) {
+  if (!ev) return "";
+  const destino = `${nombreGradoFicha(ev.grado_destino)} (${ev.grado_destino})`;
+  if (!ev.requiere_autorizacion) {
+    const texto = ev.grado_destino === ev.grado_actual ? "Repite el grado." : "Sube un grado, como corresponde.";
+    return `<div class="prom-caja prom-ok">${icono("circle-check")}<div><strong>Grado ${esc(destino)}: corresponde.</strong> ${texto}</div></div>`;
+  }
+  const s = ev.solicitud;
+  const motivos = ev.motivos.map((m) => MOTIVOS_PROMOCION[m] || m).join("; ");
+  const normal =
+    `Hoy está en ${esc(nombreGradoFicha(ev.grado_actual))} (${ev.grado_actual}). Lo normal sería ${esc(nombreGradoFicha(ev.grado_esperado))} (${ev.grado_esperado})` +
+    (ev.motivos.includes("perdidas") ? `, o repetir ${esc(nombreGradoFicha(ev.grado_actual))} por las materias perdidas.` : ".");
+  const puedeDecidir = tienePermiso("promocion.autorizar");
+  const soyYo = s && typeof sesionActual !== "undefined" && sesionActual?.usuario?.nombre === s.solicitado_por_nombre;
+  const formulario = `
+    <form class="prom-form" data-prom-form>
+      <label>¿Por qué debe matricularse en ${esc(destino)}? <span class="prom-tenue">(coordinación decide con base en esto)</span>
+        <textarea name="justificacion" rows="3" required placeholder="Ej. Recuperó las materias en el plan de mejoramiento; acta de comisión de evaluación del ..."></textarea>
+      </label>
+      <div class="prom-form-acciones"><button type="submit" class="boton">${icono("send")}Pedir permiso a coordinación</button></div>
+    </form>`;
+  let estado = "";
+  let clase = "prom-requiere";
+  if (!s) {
+    estado = formulario;
+  } else if (s.estado === "pendiente") {
+    clase = "prom-pendiente";
+    estado = `
+      <p class="prom-linea">${icono("clock-3")}<span>Permiso pedido por <b>${esc(s.solicitado_por_nombre)}</b> el ${esc(fechaHoraFicha(s.solicitado_en))}. <b>Esperando la decisión de coordinación.</b></span></p>
+      <blockquote class="prom-cita">${esc(s.justificacion)}</blockquote>
+      ${
+        puedeDecidir
+          ? `<div class="prom-decidir">
+              <textarea data-prom-nota rows="2" placeholder="Nota de la decisión (obligatoria para rechazar)"></textarea>
+              <div class="prom-form-acciones">
+                <button type="button" class="boton" data-prom-accion="aprobar" data-id="${s.id}">${icono("shield-check")}Aprobar</button>
+                <button type="button" class="boton secundario prom-boton-rechazar" data-prom-accion="rechazar" data-id="${s.id}">${icono("shield-x")}Rechazar</button>
+              </div>
+            </div>`
+          : ""
+      }
+      ${soyYo || puedeDecidir ? `<button type="button" class="boton-texto-chico prom-retirar" data-prom-accion="anular" data-id="${s.id}">Retirar solicitud</button>` : ""}`;
+  } else if (s.estado === "aprobada") {
+    clase = "prom-aprobada";
+    estado = `<p class="prom-linea">${icono("shield-check")}<span><b>Autorizado por ${esc(s.decidido_por_nombre || "coordinación")}</b> el ${esc(fechaHoraFicha(s.decidido_en))}${s.nota_decision ? `: «${esc(s.nota_decision)}»` : "."} Ya se puede generar la ficha con este grado.</span></p>
+      <p class="prom-tenue">Lo pidió ${esc(s.solicitado_por_nombre)} el ${esc(fechaHoraFicha(s.solicitado_en))}.</p>`;
+  } else if (s.estado === "rechazada") {
+    clase = "prom-rechazada";
+    estado = `<p class="prom-linea">${icono("shield-x")}<span><b>Rechazado por ${esc(s.decidido_por_nombre || "coordinación")}</b> el ${esc(fechaHoraFicha(s.decidido_en))}: «${esc(s.nota_decision || "")}»</span></p>
+      <p class="prom-tenue">Puedes matricularlo en el grado que corresponde, o volver a pedir el permiso con más información:</p>${formulario}`;
+  }
+  const titulo = s && s.estado === "aprobada" ? "Grado autorizado por coordinación" : "Este grado necesita permiso de coordinación";
+  return `
+    <div class="prom-caja ${clase}">
+      ${icono(s && s.estado === "aprobada" ? "shield-check" : "shield-alert")}
+      <div class="prom-cuerpo">
+        <strong>${titulo}: ${esc(destino)}</strong>
+        <p class="prom-motivos">Motivo: ${esc(motivos)}. ${normal}</p>
+        ${estado}
+      </div>
+    </div>`;
+}
+
+// Se pinta en TODOS los [data-ficha-riesgo] (Resumen, Matrícula y la barra
+// del visor); en el visor (data-ficha-riesgo="compacto") va sin la tabla.
+function pintarRiesgoFicha() {
+  document.querySelectorAll("[data-ficha-riesgo]").forEach((c) => {
+    const compacto = c.dataset.fichaRiesgo === "compacto";
+    const destino = gradoDestinoFicha();
+    const ev = evaluacionFicha && evaluacionFicha.grado_destino === destino ? evaluacionFicha : null;
+    c.innerHTML = (compacto || !riesgoFicha ? "" : rendimientoFichaHtml(riesgoFicha)) + estadoPromocionHtml(ev);
+  });
+}
+
+async function evaluarPromocionFicha(e) {
+  estudiantePromocion = e;
+  const destino = gradoDestinoFicha();
+  try {
+    if (destino === null) {
+      evaluacionFicha = null;
+      if (!riesgoFicha) riesgoFicha = await api(`/api/estudiantes/${e.id}/riesgo-promocion`);
+    } else {
+      evaluacionFicha = await api(`/api/promocion/evaluar?estudiante_id=${e.id}&grado_destino=${destino}`);
+      riesgoFicha = evaluacionFicha.riesgo;
+    }
+  } catch {
+    /* sin permiso o sin notas: la ficha funciona igual, solo sin el panel */
+  }
+  pintarRiesgoFicha();
+}
+
+function cargarRiesgoFicha(e) {
+  riesgoFicha = null;
+  evaluacionFicha = null;
+  return evaluarPromocionFicha(e);
+}
+
+// Al escribir en la ficha: se vuelve a evaluar solo si cambió el grado.
+function programarEvaluacionFicha(e) {
+  const destino = gradoDestinoFicha();
+  if (evaluacionFicha && evaluacionFicha.grado_destino === destino) return;
+  if (!evaluacionFicha && destino === null) return;
+  clearTimeout(_evaluarFichaTimer);
+  _evaluarFichaTimer = setTimeout(() => evaluarPromocionFicha(e), 350);
+}
+
+// Antes de generar/imprimir: evaluación fresca del grado escrito. Devuelve
+// false (y lo explica) si ese grado necesita un permiso que no está aprobado.
+async function promocionPermiteGenerar(e) {
+  clearTimeout(_evaluarFichaTimer);
+  await evaluarPromocionFicha(e);
+  if (!evaluacionFicha || evaluacionFicha.puede_generar) return true;
+  const s = evaluacionFicha.solicitud;
+  const razon = !s
+    ? "Primero hay que pedir permiso a coordinación (formulario de arriba)."
+    : s.estado === "pendiente"
+      ? "El permiso está pedido y todavía no lo aprueba coordinación."
+      : "Coordinación rechazó el permiso para este grado.";
+  pintarResultadoFicha(
+    `<div class="alerta-caja">${icono("lock")} No se puede generar ni imprimir la ficha con el grado ${evaluacionFicha.grado_destino}. ${razon} Mientras tanto puedes usar el grado que corresponde.</div>`
+  );
+  document.querySelector("[data-ficha-riesgo] .prom-caja")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  return false;
+}
+
+// Botones dentro del panel (se repite en varios sitios): delegación global.
+document.addEventListener("submit", async (ev) => {
+  const form = ev.target.closest("[data-prom-form]");
+  if (!form || !estudiantePromocion || !evaluacionFicha) return;
+  ev.preventDefault();
+  const justificacion = String(new FormData(form).get("justificacion") || "").trim();
+  const boton = form.querySelector('[type="submit"]');
+  boton.disabled = true;
+  try {
+    await api("/api/promocion/solicitudes", {
+      method: "POST",
+      body: JSON.stringify({ estudiante_id: estudiantePromocion.id, grado_destino: evaluacionFicha.grado_destino, justificacion }),
+    });
+    pintarResultadoFicha(`<div class="exito-caja">${icono("send")} Permiso pedido. Coordinación lo verá en «Autorizaciones de promoción»; aquí mismo aparecerá su respuesta.</div>`);
+    await evaluarPromocionFicha(estudiantePromocion);
+  } catch (err) {
+    boton.disabled = false;
+    pintarResultadoFicha(`<div class="alerta-caja">${esc(err.message)}</div>`);
+  }
+});
+
+document.addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("[data-prom-accion]");
+  if (!btn || !estudiantePromocion) return;
+  const accion = btn.dataset.promAccion;
+  const id = btn.dataset.id;
+  try {
+    if (accion === "anular") {
+      if (!confirm("¿Retirar esta solicitud de permiso?")) return;
+      await api(`/api/promocion/solicitudes/${id}/anular`, { method: "POST" });
+    } else {
+      const nota = btn.closest(".prom-cuerpo")?.querySelector("[data-prom-nota]")?.value || "";
+      await api(`/api/promocion/solicitudes/${id}/decidir`, {
+        method: "POST",
+        body: JSON.stringify({ aprobar: accion === "aprobar", nota }),
+      });
+    }
+    await evaluarPromocionFicha(estudiantePromocion);
+  } catch (err) {
+    pintarResultadoFicha(`<div class="alerta-caja">${esc(err.message)}</div>`);
+  }
+});
+
+// El resultado de generar/guardar la ficha también puede pedirse desde el
+// panel de Matrícula o desde el visor abierto: se pinta en los dos.
+function pintarResultadoFicha(html) {
+  document.querySelectorAll("[data-resultado-ficha]").forEach((c) => { c.innerHTML = html; });
+}
+
+// Guarda en el estudiante lo escrito en la ficha para que el programa lo use.
+async function guardarDatosFicha(e) {
+  const campos = {};
+  document.querySelectorAll("#ficha-hoja input").forEach((i) => { campos[i.name] = i.value; });
+  await api(fichaUrlDatosFicha(e.id), { method: "PUT", body: JSON.stringify({ campos }) });
+}
+
+// Carga la ficha (tablas HTML reales, generadas de la plantilla Word por
+// herramientas/generar_html_ficha.py) y le pone los datos verificados.
+async function cargarHojaFicha(e) {
+  const cont = document.getElementById("ficha-contenedor");
+  if (!cont) return;
+  const res = await fetch("/static/ficha_matricula.html?v=f60");
+  cont.innerHTML = await res.text();
+  const inicial = valoresInicialesFicha(e);
+  cont.querySelectorAll("input").forEach((i) => { i.value = inicial[i.name] || ""; });
+  try {
+    // Lo que ya se guardó del estudiante (acudiente, comunidad, etnia, discapacidad...).
+    const guardado = await api(fichaUrlDatosFicha(e.id));
+    cont.querySelectorAll("input").forEach((i) => {
+      if (guardado.campos[i.name] !== undefined) i.value = guardado.campos[i.name];
+    });
+  } catch {
+    /* sin permiso o sin datos guardados: se queda con los valores por defecto */
+  }
+  aplicarZoomFicha();
+}
+
+// El zoom NO modifica el documento: fija la variable CSS --z que la propia
+// hoja ya usa para escalarse (ver el <style> de ficha_matricula.html).
+function aplicarZoomFicha() {
+  const control = document.getElementById("zoom-ficha");
+  if (!control) return;
+  const z = Number(control.value);
+  document.getElementById("zoom-ficha-valor").textContent = `${z}%`;
+  document.getElementById("ficha-hoja")?.style.setProperty("--z", z / 100);
+  guardarPreferencia("ietaba_zoom_ficha", String(z));
+}
+
+// Imprime solo la ficha, con lo escrito en las casillas.
+function imprimirFicha() {
+  const hoja = document.getElementById("ficha-hoja").cloneNode(true);
+  document.querySelectorAll("#ficha-hoja input").forEach((orig, i) => {
+    hoja.querySelectorAll("input")[i].setAttribute("value", orig.value);
+  });
+  const estilos = document.querySelector("#ficha-contenedor style")?.outerHTML || "";
+  const w = window.open("", "_blank");
+  w.document.write(`<!doctype html><meta charset="utf-8"><title>Ficha de matrícula</title>${estilos}<body style="margin:0">${hoja.outerHTML}</body>`);
+  w.document.close();
+  w.onload = () => { w.focus(); w.print(); };
+  setTimeout(() => { try { w.focus(); w.print(); } catch {} }, 700);
 }
 
 // "permanente" es el valor por defecto del checkbox según la categoría —
@@ -193,23 +553,49 @@ function fotoHtml(f) {
   return `
     <div class="foto-card">
       ${contenido}
-      <div class="foto-etiqueta">${f.etiqueta}</div>
-      <button type="button" class="boton secundario" data-eliminar-foto="${f.id}">Eliminar</button>
+      <div class="foto-etiqueta">${esc(f.etiqueta)}</div>
+      <button type="button" class="boton secundario boton-chico" data-eliminar-foto="${f.id}">Eliminar</button>
     </div>`;
 }
 
-// --- Carrusel de documentos por categoría (ficha del estudiante) -----------
-// Reemplaza la vieja galería plana: muestra las 8 categorías esperadas una
-// por una (con flechas para pasar y "peeks" a los lados, como el diseño de
-// referencia), y cuando a una categoría le falta el archivo aparece un botón
-// grande de "Escanear / Subir" en su lugar en vez de tener que ir a buscar
-// un formulario aparte y elegir el tipo de documento a mano.
+// --- Estado de la vista ----------------------------------------------------
 
 let fichaDocEstudianteIdActual = null; // para saber cuándo cambió de estudiante
 let fichaDocCategoriaIndex = 0;
 let fichaDocAnioSeleccionado = null; // null = automático (año más reciente con datos, o el actual)
 let fichaDocAccionPendiente = null; // { modo: "escanear"|"reemplazar", categoria, permanente, fotoIdAReemplazar? }
-let vistaDocumentos = leerPreferencia("ietaba_vista_documentos", "carrusel"); // "carrusel" | "lista"
+let vistaDocumentos = leerPreferencia("ietaba_vista_documentos", "lista"); // "lista" | "carrusel"
+
+const SUBVISTAS_FICHA = [
+  { id: "resumen", nombre: "Resumen" },
+  { id: "datos", nombre: "Datos" },
+  { id: "documentos", nombre: "Documentos" },
+  { id: "matricula", nombre: "Matrícula" },
+  { id: "constancias", nombre: "Constancias" },
+];
+let fichaSub = "resumen";        // pestaña activa; se conserva entre renders
+let fichaVisorAbierto = false;   // visor a pantalla completa de la ficha oficial
+let fichaModalAbierto = null;    // null | "masiva" | "otro"
+let fichaAviso = null;           // { tipo: "exito"|"error", texto } a mostrar tras re-renderizar
+
+// Fase docente (22/09/2026): el director de grupo abre esta MISMA ficha desde
+// el módulo docente (docente.js) para ver/editar la ficha de matrícula
+// completa de un estudiante de su grupo — el documento oficial no se
+// reconstruye aparte. `fichaModoDocente` cambia solo 3 cosas: a qué URL se
+// piden/guardan los datos (fichaUrlEstudiante/fichaUrlDatosFicha), qué
+// subvistas y acciones administrativas se muestran, y a dónde vuelve el
+// botón "Volver" — el layout de #ficha-hoja NO cambia nunca.
+let fichaModoDocente = false;
+
+const SUBVISTAS_FICHA_DOCENTE = ["datos", "documentos", "matricula"];
+
+function fichaUrlEstudiante(id) {
+  return fichaModoDocente ? `/api/docente/estudiante/${id}/completo` : `/api/estudiantes/${id}`;
+}
+
+function fichaUrlDatosFicha(id) {
+  return fichaModoDocente ? `/api/docente/estudiante/${id}/datos-ficha` : `/api/estudiantes/${id}/datos-ficha`;
+}
 
 // La categoría que se estaba viendo se recuerda POR ESTUDIANTE (no solo en
 // memoria): así, volver a un estudiante — o recargar la página — no manda
@@ -240,22 +626,22 @@ function tarjetaPeekDocHtml(categoria, foto, indice) {
   return `
     <div class="doc-carrusel-peek" data-doc-ir="${indice}">
       <div class="doc-carrusel-preview">
-        ${foto ? imagenConEstadoHtml(`/api/fotos/${foto.id}/miniatura`, "") : '<span class="doc-carrusel-peek-icono">📄</span>'}
+        ${foto ? imagenConEstadoHtml(`/api/fotos/${foto.id}/miniatura`, "") : '<span class="doc-carrusel-peek-icono"><i data-lucide=file-text class=ico></i> </span>'}
       </div>
       <span class="doc-carrusel-peek-etiqueta">${categoria.nombre}</span>
     </div>`;
 }
 
 // Acciones de una categoría (escanear/reescanear/reemplazar/eliminar) —
-// las mismas para el carrusel y para la lista, un solo lugar.
+// las mismas para el carrusel y para la rejilla, un solo lugar.
 function accionesDocCategoriaHtml(categoria, foto, tamano) {
   const chico = tamano === "chico" ? " boton-chico" : "";
   if (foto) {
-    return `<button type="button" class="boton secundario${chico}" data-doc-escanear="1" data-doc-categoria="${categoria.nombre}" data-doc-permanente="${categoria.permanente}" data-doc-foto-id-reemplazar="${foto.id}">📷 Reescanear</button>
-            <button type="button" class="boton secundario${chico}" data-doc-accion="reemplazar" data-doc-categoria="${categoria.nombre}" data-doc-permanente="${categoria.permanente}" data-doc-foto-id="${foto.id}">🔄 Reemplazar archivo</button>
-            <button type="button" class="boton secundario${chico}" data-eliminar-foto="${foto.id}">🗑 Eliminar</button>`;
+    return `<button type="button" class="boton secundario${chico}" data-doc-escanear="1" data-doc-categoria="${categoria.nombre}" data-doc-permanente="${categoria.permanente}" data-doc-foto-id-reemplazar="${foto.id}"><i data-lucide=camera class=ico></i> Reescanear</button>
+            <button type="button" class="boton secundario${chico}" data-doc-accion="reemplazar" data-doc-categoria="${categoria.nombre}" data-doc-permanente="${categoria.permanente}" data-doc-foto-id="${foto.id}"><i data-lucide=refresh-cw class=ico></i> Reemplazar archivo</button>
+            <button type="button" class="boton secundario${chico}" data-eliminar-foto="${foto.id}"><i data-lucide=trash-2 class=ico></i> Eliminar</button>`;
   }
-  return `<button type="button" class="boton doc-carrusel-boton-escanear" data-doc-escanear="1" data-doc-categoria="${categoria.nombre}" data-doc-permanente="${categoria.permanente}">📷 Escanear documento</button>
+  return `<button type="button" class="boton doc-carrusel-boton-escanear" data-doc-escanear="1" data-doc-categoria="${categoria.nombre}" data-doc-permanente="${categoria.permanente}"><i data-lucide=camera class=ico></i> Escanear documento</button>
           <button type="button" class="boton-texto-chico" data-doc-accion="escanear" data-doc-categoria="${categoria.nombre}" data-doc-permanente="${categoria.permanente}">o subir un archivo existente</button>`;
 }
 
@@ -287,7 +673,7 @@ function carruselCuerpoHtml(fotos, anio) {
                    ${imagenConEstadoHtml(`/api/fotos/${fotoActual.id}/miniatura`, catActual.nombre)}
                    ${fotoActual.es_pdf ? '<span class="foto-badge-pdf">PDF</span>' : ""}
                  </a>`
-              : `<span class="doc-carrusel-vacio-icono">📄</span><p class="doc-carrusel-vacio-texto">Todavía no se ha subido</p>`
+              : `<span class="doc-carrusel-vacio-icono"><i data-lucide=file-text class=ico></i> </span><p class="doc-carrusel-vacio-texto">Todavía no se ha subido</p>`
           }
         </div>
         <div class="doc-carrusel-acciones">${accionesDocCategoriaHtml(catActual, fotoActual, "chico")}</div>
@@ -299,51 +685,42 @@ function carruselCuerpoHtml(fotos, anio) {
   `;
 }
 
-function tarjetaDocListaHtml(categoria, foto) {
+// Rejilla (vista por defecto): una unidad visual por categoría, y el estado
+// — cargado / pendiente — se ve de un golpe sin leer los nombres.
+function tarjetaDocHtml(categoria, foto) {
+  const estado = foto
+    ? '<span class="est-chip ok"><i data-lucide=check class=ico></i> Cargado</span>'
+    : '<span class="est-chip pendiente"><i data-lucide=triangle-alert class=ico></i> Pendiente</span>';
+  const alcance = categoria.permanente
+    ? '<span class="est-doc-alcance">Todos los años</span>'
+    : '<span class="est-doc-alcance">Por año lectivo</span>';
   return `
-    <div class="tarjeta-doc-lista">
-      <div class="tarjeta-doc-lista-preview">
+    <article class="est-doc-card ${foto ? "ok" : "falta"}">
+      <div class="est-doc-thumb">
         ${
           foto
-            ? `<a href="/api/fotos/${foto.id}/archivo" target="_blank">
+            ? `<a href="/api/fotos/${foto.id}/archivo" target="_blank" title="Abrir documento">
                  ${imagenConEstadoHtml(`/api/fotos/${foto.id}/miniatura`, categoria.nombre)}
                  ${foto.es_pdf ? '<span class="foto-badge-pdf">PDF</span>' : ""}
                </a>`
-            : `<span class="doc-carrusel-vacio-icono">📄</span>`
+            : '<span class="est-doc-thumb-vacio"><i data-lucide=file-text class=ico></i> </span>'
         }
       </div>
-      <div class="tarjeta-doc-lista-nombre">
-        ${categoria.nombre}${categoria.permanente ? ' <span class="doc-carrusel-permanente">· todos los años</span>' : ""}
+      <div class="est-doc-cuerpo">
+        <h4 class="est-doc-nombre">${categoria.nombre}</h4>
+        <p class="est-doc-estado">${estado} ${alcance}</p>
+        <div class="est-doc-acciones">
+          ${foto ? `<a class="boton secundario boton-chico" href="/api/fotos/${foto.id}/archivo" target="_blank"><i data-lucide=eye class=ico></i> Ver</a>` : ""}
+          ${accionesDocCategoriaHtml(categoria, foto, "chico")}
+        </div>
       </div>
-      <div class="tarjeta-doc-lista-acciones">${accionesDocCategoriaHtml(categoria, foto, "chico")}</div>
-    </div>`;
+    </article>`;
 }
 
-function listaDocumentosHtml(fotos, anio) {
-  return `<div class="grid-tarjetas-doc">
-    ${CATEGORIAS_DOCUMENTO.map((cat) => tarjetaDocListaHtml(cat, fotoParaCategoria(fotos, cat, anio))).join("")}
+function rejillaDocumentosHtml(fotos, anio) {
+  return `<div class="est-doc-grid">
+    ${CATEGORIAS_DOCUMENTO.map((cat) => tarjetaDocHtml(cat, fotoParaCategoria(fotos, cat, anio))).join("")}
   </div>`;
-}
-
-// Encabezado compartido (título + selector Carrusel/Lista + año lectivo) y
-// el input de archivo oculto que usan tanto "Escanear"/"Reemplazar" como el
-// escáner, sin importar cuál de las dos vistas esté activa.
-function documentosSeccionHtml(fotos) {
-  const anio = fichaDocAnioSeleccionado ?? new Date().getFullYear();
-  return `
-    <div class="doc-carrusel-encabezado">
-      <h4>Documentos por categoría</h4>
-      <div class="doc-vista-toggle" role="group" aria-label="Vista de documentos">
-        <button type="button" class="doc-vista-btn ${vistaDocumentos === "carrusel" ? "activo" : ""}" data-doc-vista="carrusel">▤ Carrusel</button>
-        <button type="button" class="doc-vista-btn ${vistaDocumentos === "lista" ? "activo" : ""}" data-doc-vista="lista">☰ Lista</button>
-      </div>
-      <label class="check-linea">Año lectivo
-        <select id="select-anio-documentos">${opcionesAnioLectivo(anio)}</select>
-      </label>
-    </div>
-    ${vistaDocumentos === "carrusel" ? carruselCuerpoHtml(fotos, anio) : listaDocumentosHtml(fotos, anio)}
-    <input type="file" id="doc-carrusel-input-archivo" accept="image/*,application/pdf" style="display:none" />
-  `;
 }
 
 // Punto único de subida de un documento por categoría — lo usan tanto el
@@ -375,22 +752,41 @@ function otrosDocumentosHtml(fotos) {
   const otros = fotos.filter((f) => !nombresFijos.has(f.etiqueta));
   if (!otros.length) return "";
   return `
-    <details class="seccion-colapsable" style="margin-top:14px">
-      <summary>Otros documentos (${otros.length})</summary>
+    <section class="est-bloque est-bloque-suelto">
+      <header class="est-bloque-head">
+        <h3>Documentos adicionales <span class="est-contador">${otros.length}</span></h3>
+      </header>
       <div class="galeria-fotos">${otros.map(fotoHtml).join("")}</div>
-    </details>`;
+    </section>`;
 }
 
-// La ficha arranca en solo-lectura por sección: los campos se pueden leer y
-// copiar, pero no se modifican por accidente. "Editar" desbloquea esa sección
-// y muestra Guardar / Cancelar; al guardar o cancelar se vuelve a bloquear.
+// --- Bloques de datos en solo-lectura ---------------------------------------
+// Cada bloque tiene su propio [Editar]: desbloquea SOLO esa sección y muestra
+// Guardar / Cancelar. Al guardar o cancelar vuelve a bloquearse.
+
 function accionesFichaHtml() {
   return `
     <div class="ancho-completo form-acciones-ficha">
-      <button type="button" class="boton secundario" data-ficha-editar>✏️ Editar</button>
-      <button type="submit" class="boton" data-ficha-guardar hidden>Guardar</button>
-      <button type="button" class="boton secundario" data-ficha-cancelar hidden>Cancelar</button>
+      <button type="button" class="boton secundario boton-chico" data-ficha-editar><i data-lucide=pencil class=ico></i> Editar</button>
+      <button type="submit" class="boton boton-chico" data-ficha-guardar hidden>Guardar</button>
+      <button type="button" class="boton secundario boton-chico" data-ficha-cancelar hidden>Cancelar</button>
     </div>`;
+}
+
+function bloqueDatosHtml(titulo, descripcion, idForm, camposHtml, extraHtml) {
+  return `
+    <section class="est-bloque">
+      <header class="est-bloque-head">
+        <h3>${titulo}</h3>
+        ${descripcion ? `<p class="est-bloque-desc">${descripcion}</p>` : ""}
+      </header>
+      <form id="${idForm}" class="form-grid form-grid-bloque" data-bloqueable>
+        ${camposHtml}
+        ${accionesFichaHtml()}
+      </form>
+      <div id="resultado-${idForm}"></div>
+      ${extraHtml || ""}
+    </section>`;
 }
 
 function bloquearFormularioFicha(form) {
@@ -417,140 +813,481 @@ function desbloquearFormularioFicha(form) {
 }
 
 function vincularBloqueoFicha() {
-  ["form-datos-estudiante", "form-doc-identidad"].forEach((id) => {
-    const form = document.getElementById(id);
-    if (!form) return;
+  document.querySelectorAll("form[data-bloqueable]").forEach((form) => {
     bloquearFormularioFicha(form);
     form.querySelector("[data-ficha-editar]").addEventListener("click", () => desbloquearFormularioFicha(form));
     form.querySelector("[data-ficha-cancelar]").addEventListener("click", () => renderFicha());
   });
 }
 
-async function renderFicha() {
-  app.innerHTML = "<p>Cargando...</p>";
-  const [e, opciones] = await Promise.all([
-    api(`/api/estudiantes/${fichaEstudianteId}`),
-    api("/api/certificados/opciones"),
-  ]);
-
-  const nombreCompleto = `${e.primer_nombre} ${e.segundo_nombre || ""} ${e.primer_apellido} ${e.segundo_apellido || ""}`
-    .replace(/\s+/g, " ")
-    .trim();
-  const hoy = fechaColombiaISO();
-
-  if (fichaDocEstudianteIdActual !== fichaEstudianteId) {
-    fichaDocEstudianteIdActual = fichaEstudianteId;
-    fichaDocCategoriaIndex = leerIndiceCategoriaGuardado(fichaEstudianteId);
-    fichaDocAnioSeleccionado = null;
+// Muestra, dentro de "Datos", lo que se guardó desde la ficha de matrícula
+// (acudiente, comunidad, etnia, discapacidad...). Es de solo lectura: se
+// cambia abriendo la ficha oficial en la pestaña «Matrícula».
+async function pintarDatosMatriculaGuardados(e) {
+  const cont = document.getElementById("datos-matricula-guardados");
+  if (!cont) return;
+  let c;
+  try {
+    c = (await api(fichaUrlDatosFicha(e.id))).campos;
+  } catch {
+    return;
   }
+  const marca = (k) => (c[k] ? "Sí" : "");
+  const siNo = (si, no) => (c[si] ? "Sí" : c[no] ? "No" : "");
+  const etnia = c.etnia_indigena ? "Indígena" : c.etnia_afro ? "Afro" : c.etnia_mestizo ? "Mestizo" : "";
+  const disc = c.discap_si
+    ? ["disc_ceguera:Ceguera", "disc_sordera:Sordera", "disc_fisica:Dificultad para moverse", "disc_down:Síndrome Down",
+       "disc_cognitiva:Cognitiva", "disc_multiple:Múltiple"]
+        .filter((x) => c[x.split(":")[0]]).map((x) => x.split(":")[1])
+        .concat(c.disc_otras ? [`Otras: ${c.disc_otras}`] : []).join(", ") || "Sí"
+    : c.discap_no ? "No" : "";
+  const ingreso = c.ingreso_dia ? `${c.ingreso_dia} ${c.ingreso_mes || ""} ${c.ingreso_anio || ""}`.trim() : "";
+  const filas = [
+    ["Acudiente", [c.acudiente, c.parentesco && `(${c.parentesco})`, c.documento_acudiente && `doc. ${c.documento_acudiente}`].filter(Boolean).join(" ")],
+    ["Lugar de expedición del documento", c.municipio_expedicion],
+    ["Municipio de nacimiento", c.municipio_nacimiento],
+    ["Comunidad / dirección", c.direccion],
+    ["Resguardo", c.resguardo],
+    ["Viene de (C.E.)", c.procedencia],
+    ["Etnia", etnia],
+    ["Habla Awapit", siNo("awapit_si", "awapit_no")],
+    ["Madre cabeza de familia", siNo("madre_si", "madre_no")],
+    ["Discapacidad", disc],
+    ["Necesita educación especial", siNo("educ_esp_si", "educ_esp_no")],
+    ["En situación de desplazamiento", siNo("desplaz_si", "desplaz_no")],
+    ["Fecha de ingreso al colegio", ingreso],
+    ["Estudiante SGP", marca("sgp")],
+  ].filter(([, v]) => v);
+  cont.innerHTML = filas.length
+    ? `<dl class="est-dl">
+         ${filas.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}
+       </dl>`
+    : `<p class="pendiente est-vacio-linea">Aún no hay datos de matrícula guardados (acudiente, comunidad, etnia...).
+       Se llenan abriendo la ficha oficial en la pestaña «Matrícula».</p>`;
+}
 
-  app.innerHTML = `
-    <button class="volver" id="btn-volver-ficha">← Volver</button>
-    <div class="ficha-header">
-      <h1>${nombreCompleto}</h1>
-      <p class="ficha-meta">
-        ${e.grupo} · ${e.sede ? e.sede.nombre : "sin sede"} · Documento: ${e.documento}
-        · <span class="badge ${e.activo ? "activo" : "inactivo"}">${(e.estado || "").toLowerCase()}</span>
-      </p>
-    </div>
+// --- Helpers de presentación (sólo formato, no inventan datos) --------------
 
-    <details class="seccion-colapsable" open>
-      <summary>Datos del estudiante</summary>
-      <form id="form-datos-estudiante" class="form-grid">
-        <label>Fecha de nacimiento
-          <input type="date" name="fecha_nacimiento" value="${e.fecha_nacimiento || ""}" />
-        </label>
-        <label>Género
-          <select name="genero">
-            <option value="" ${!e.genero ? "selected" : ""}>Sin dato</option>
-            <option value="M" ${e.genero === "M" ? "selected" : ""}>Masculino</option>
-            <option value="F" ${e.genero === "F" ? "selected" : ""}>Femenino</option>
-          </select>
-        </label>
-        <label>Grado
-          <select name="grado">
-            ${NOMBRES_GRADOS.map(([g, nombre]) => `<option value="${g}" ${g === e.grado ? "selected" : ""}>${nombre}</option>`).join("")}
-          </select>
-        </label>
-        <label>Curso / sección
-          <input type="number" name="curso" min="1" step="1" value="${e.curso ?? ""}" placeholder="Ej: 1, 2, 3..." />
-        </label>
-        <label>ID de estudiante (SIMAT)
-          <input type="text" name="id_estud" value="${e.id_estud || ""}" />
-        </label>
-        <label class="ancho-completo">Observaciones
-          <input type="text" name="observaciones" value="${e.observaciones || ""}" placeholder="Notas internas sobre este estudiante" />
-        </label>
-        <label class="ancho-completo check-linea">
-          <input type="checkbox" name="posible_retirado" ${e.posible_retirado ? "checked" : ""} />
-          Posible retirado — sigue en el sistema pero <strong>no cuenta</strong> en los pendientes de boletín (¿qué falta?). No es un retiro formal.
-        </label>
-        ${accionesFichaHtml()}
-      </form>
-      <div id="resultado-datos-estudiante"></div>
-      ${
-        e.curso === null
-          ? `<p class="pendiente" style="font-size:12.5px; margin-top:10px">
-               ⚠ Sin sección/curso asignado — esto es normal para las sedes rurales que todavía no
-               tienen su propio Excel de matrícula. Complétalo aquí si ya lo confirmaste.
-             </p>`
-          : ""
-      }
-    </details>
+function inicialesEstudiante(e) {
+  return `${(e.primer_nombre || "?")[0]}${(e.primer_apellido || "")[0] || ""}`.toUpperCase();
+}
 
-    <details class="seccion-colapsable" open>
-      <summary>Tipo y número de documento</summary>
-      <form id="form-doc-identidad" class="form-grid">
-        ${tipoDocumentoSelectHtml("tipo_documento", e.tipo_documento || "")}
-        <label>Número de documento
-          <input type="text" name="documento" value="${e.documento}" />
-        </label>
-        <label class="ancho-completo">Lugar de expedición
-          <input type="text" name="lugar_expedicion_documento" value="${e.lugar_expedicion_documento || ""}" placeholder="Ej: Barbacoas (N)" />
-        </label>
-        ${accionesFichaHtml()}
-      </form>
-      <div id="resultado-doc-identidad"></div>
-      ${
-        e.historial_documento.length
-          ? `<details class="seccion-colapsable" style="margin-top:14px">
-               <summary>Historial de documento (${e.historial_documento.length})</summary>
-               <table>
-                 <thead><tr><th>Tipo</th><th>Número</th><th>Vigente hasta</th></tr></thead>
-                 <tbody>
-                   ${e.historial_documento
-                     .map(
-                       (h) =>
-                         `<tr><td>${h.tipo_documento || "-"}</td><td>${h.documento || "-"}</td><td>${h.vigente_hasta.slice(0, 16).replace("T", " ")}</td></tr>`
-                     )
-                     .join("")}
-                 </tbody>
-               </table>
-             </details>`
-          : ""
-      }
-    </details>
+function fechaLegible(iso) {
+  if (!iso) return "";
+  const [a, m, d] = iso.split("-");
+  return `${d}/${m}/${a}`;
+}
 
-    <details class="seccion-colapsable" open>
-      <summary>Documentos de matrícula</summary>
-      ${documentosSeccionHtml(e.fotos)}
-      ${otrosDocumentosHtml(e.fotos)}
-      <details class="seccion-colapsable" style="margin-top:14px">
-        <summary>📤 Subir varios documentos de este estudiante a la vez</summary>
-        <p class="pendiente" style="font-size:12.5px">
+function edadDesde(iso) {
+  if (!iso) return "";
+  const n = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(n.getTime())) return "";
+  const hoy = new Date();
+  let edad = hoy.getFullYear() - n.getFullYear();
+  const m = hoy.getMonth() - n.getMonth();
+  if (m < 0 || (m === 0 && hoy.getDate() < n.getDate())) edad--;
+  return edad >= 0 && edad < 120 ? `${edad} años` : "";
+}
+
+function nombreGrado(grado) {
+  return (NOMBRES_GRADOS.find(([g]) => g === grado) || [0, String(grado)])[1];
+}
+
+// Lista de definición compacta. Los valores llegan YA escapados o son HTML
+// controlado (badges); las claves se escapan aquí.
+function dlHtml(filas) {
+  const visibles = filas.filter(([, v]) => v !== "" && v !== null && v !== undefined);
+  if (!visibles.length) return '<p class="pendiente est-vacio-linea">Sin datos.</p>';
+  return `<dl class="est-dl">${visibles
+    .map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${v}</dd></div>`)
+    .join("")}</dl>`;
+}
+
+// --- Paneles ----------------------------------------------------------------
+
+function panelResumenHtml(e, docs) {
+  const tipoDoc = e.tipo_documento ? `${esc(e.tipo_documento)} ` : "";
+  const pendientesHtml = docs.faltantes.length
+    ? `<ul class="est-pendientes">${docs.faltantes.map((c) => `<li>${c.nombre}</li>`).join("")}</ul>`
+    : '<p class="est-completo"><i data-lucide=check class=ico></i> Toda la documentación está cargada.</p>';
+
+  return `
+    <div class="est-columnas">
+      <div class="est-columna-principal">
+        <div data-ficha-riesgo></div>
+        ${
+          e.curso === null
+            ? `<div class="est-nota-suave"><i data-lucide=triangle-alert class=ico></i> Sin sección/curso asignado — es normal en las sedes rurales que todavía no
+                 tienen su propio Excel de matrícula. Se completa en la pestaña «Datos».</div>`
+            : ""
+        }
+        <section class="est-bloque">
+          <header class="est-bloque-head">
+            <h3>Información del estudiante</h3>
+            <button type="button" class="boton secundario boton-chico" data-ir-sub="datos">Editar datos</button>
+          </header>
+          ${dlHtml([
+            ["Documento", `${tipoDoc}${esc(e.documento)}`],
+            ["Lugar de expedición", esc(e.lugar_expedicion_documento || "")],
+            ["Fecha de nacimiento", [fechaLegible(e.fecha_nacimiento), edadDesde(e.fecha_nacimiento)].filter(Boolean).join(" · ")],
+            ["Género", e.genero === "M" ? "Masculino" : e.genero === "F" ? "Femenino" : ""],
+            ["Grado", esc(nombreGrado(e.grado))],
+            ["Curso / sección", e.curso === null ? "" : esc(String(e.curso))],
+            ["Grupo", esc(e.grupo || "")],
+            ["Sede", esc(e.sede ? e.sede.nombre : "")],
+            ["ID SIMAT", esc(e.id_estud || "")],
+            ["Estado", `<span class="badge ${e.activo ? "activo" : "inactivo"}">${esc((e.estado || "").toLowerCase())}</span>`],
+            ["Resguardo", e.resguardo === false ? "No pertenece a un resguardo" : "Sí pertenece a un resguardo"],
+            ["Posible retirado", e.posible_retirado ? "Sí — no cuenta en los pendientes de boletín" : ""],
+            ["Observaciones", esc(e.observaciones || "")],
+          ])}
+        </section>
+      </div>
+
+      <aside class="est-columna-lateral">
+        <section class="est-bloque est-bloque-lateral">
+          <header class="est-bloque-head"><h3>Estado de documentación</h3></header>
+          <div class="est-progreso">
+            <div class="est-progreso-barra ${docs.faltantes.length ? "" : "completo"}">
+              <span style="width:${docs.pct}%"></span>
+            </div>
+            <div class="est-progreso-texto">
+              <strong>${docs.cargados} de ${docs.total}</strong> documentos · ${docs.pct}%
+            </div>
+          </div>
+          <p class="est-bloque-desc">Año lectivo ${docs.anio}</p>
+          ${docs.faltantes.length ? "<p class=\"est-subtitulo-mini\">Pendientes</p>" : ""}
+          ${pendientesHtml}
+          <button type="button" class="boton secundario est-boton-ancho" data-ir-sub="documentos">Ver documentos</button>
+        </section>
+
+        <section class="est-bloque est-bloque-lateral">
+          <header class="est-bloque-head"><h3>Acciones rápidas</h3></header>
+          <div class="est-acciones-rapidas">
+            <button type="button" class="boton est-boton-ancho" data-ficha-accion="abrir"><i data-lucide=clipboard-list class=ico></i> Abrir ficha de matrícula</button>
+            <button type="button" class="boton secundario est-boton-ancho" data-ir-sub="constancias"><i data-lucide=file-text class=ico></i> Generar constancia</button>
+            <button type="button" class="boton secundario est-boton-ancho" data-ficha-accion="word"><i data-lucide=download class=ico></i> Ficha en Word</button>
+            <button type="button" class="boton secundario est-boton-ancho" data-ficha-accion="imprimir"><i data-lucide=printer class=ico></i> Imprimir ficha</button>
+          </div>
+          <div data-resultado-ficha></div>
+        </section>
+      </aside>
+    </div>`;
+}
+
+function panelDatosHtml(e) {
+  const historial = e.historial_documento.length
+    ? `<details class="seccion-colapsable est-sub-detalle">
+         <summary>Historial de documento (${e.historial_documento.length})</summary>
+         <table>
+           <thead><tr><th>Tipo</th><th>Número</th><th>Vigente hasta</th></tr></thead>
+           <tbody>
+             ${e.historial_documento
+               .map((h) => `<tr><td>${esc(h.tipo_documento || "-")}</td><td>${esc(h.documento || "-")}</td><td>${h.vigente_hasta.slice(0, 16).replace("T", " ")}</td></tr>`)
+               .join("")}
+           </tbody>
+         </table>
+       </details>`
+    : "";
+
+  return `
+    <div class="est-grid-bloques">
+      ${bloqueDatosHtml(
+        "Identificación",
+        "Cambiar el tipo o el número guarda el valor anterior en el historial.",
+        "form-doc-identidad",
+        `${tipoDocumentoSelectHtml("tipo_documento", e.tipo_documento || "")}
+         <label>Número de documento
+           <input type="text" name="documento" value="${esc(e.documento)}" />
+         </label>
+         <label class="ancho-completo">Lugar de expedición
+           <input type="text" name="lugar_expedicion_documento" value="${esc(e.lugar_expedicion_documento || "")}" placeholder="Ej: Barbacoas (N)" />
+         </label>`,
+        historial
+      )}
+
+      ${bloqueDatosHtml(
+        "Información académica",
+        `Sede: ${esc(e.sede ? e.sede.nombre : "sin sede")} · Grupo: ${esc(e.grupo || "-")}`,
+        "form-datos-academicos",
+        `<label>Grado
+           <select name="grado">
+             ${NOMBRES_GRADOS.map(([g, nombre]) => `<option value="${g}" ${g === e.grado ? "selected" : ""}>${nombre}</option>`).join("")}
+           </select>
+         </label>
+         <label>Curso / sección
+           <input type="number" name="curso" min="1" step="1" value="${e.curso ?? ""}" placeholder="Ej: 1, 2, 3..." />
+         </label>
+         <label class="ancho-completo">ID de estudiante (SIMAT)
+           <input type="text" name="id_estud" value="${esc(e.id_estud || "")}" />
+         </label>`
+      )}
+
+      ${bloqueDatosHtml(
+        "Información personal",
+        "",
+        "form-datos-personales",
+        `<label>Fecha de nacimiento
+           <input type="date" name="fecha_nacimiento" value="${e.fecha_nacimiento || ""}" />
+         </label>
+         <label>Género
+           <select name="genero">
+             <option value="" ${!e.genero ? "selected" : ""}>Sin dato</option>
+             <option value="M" ${e.genero === "M" ? "selected" : ""}>Masculino</option>
+             <option value="F" ${e.genero === "F" ? "selected" : ""}>Femenino</option>
+           </select>
+         </label>`
+      )}
+
+      ${bloqueDatosHtml(
+        "Estado y observaciones",
+        "",
+        "form-datos-estado",
+        `<label class="ancho-completo">Observaciones
+           <input type="text" name="observaciones" value="${esc(e.observaciones || "")}" placeholder="Notas internas sobre este estudiante" />
+         </label>
+         <label class="ancho-completo check-linea">
+           <input type="checkbox" name="resguardo" ${e.resguardo === false ? "" : "checked"} />
+           Pertenece a un resguardo
+         </label>
+         <label class="ancho-completo check-linea">
+           <input type="checkbox" name="posible_retirado" ${e.posible_retirado ? "checked" : ""} />
+           Posible retirado — sigue en el sistema pero <strong>no cuenta</strong> en los pendientes de boletín. No es un retiro formal.
+         </label>`
+      )}
+
+      <section class="est-bloque est-bloque-ancho">
+        <header class="est-bloque-head">
+          <h3>Datos de la ficha de matrícula</h3>
+          <button type="button" class="boton secundario boton-chico" data-ficha-accion="abrir">Abrir ficha para editarlos</button>
+        </header>
+        <p class="est-bloque-desc">Acudiente, comunidad, etnia, discapacidad… Son de solo lectura aquí: se escriben en la ficha oficial.</p>
+        <div id="datos-matricula-guardados"></div>
+      </section>
+    </div>`;
+}
+
+function panelDocumentosHtml(e, docs) {
+  return `
+    <section class="est-bloque est-bloque-ancho">
+      <header class="est-doc-barra">
+        <div class="est-doc-barra-titulo">
+          <h3>Documentos de matrícula</h3>
+          <p class="est-bloque-desc">
+            ${docs.cargados} de ${docs.total} cargados${docs.faltantes.length ? ` · faltan ${docs.faltantes.length}` : " · completo"}
+          </p>
+        </div>
+        <div class="est-doc-barra-controles">
+          <label class="filtro-campo">Año lectivo
+            <select id="select-anio-documentos">${opcionesAnioLectivo(docs.anio)}</select>
+          </label>
+          <div class="doc-vista-toggle" role="group" aria-label="Vista de documentos">
+            <button type="button" class="doc-vista-btn ${vistaDocumentos === "lista" ? "activo" : ""}" data-doc-vista="lista"><i data-lucide=menu class=ico></i> Rejilla</button>
+            <button type="button" class="doc-vista-btn ${vistaDocumentos === "carrusel" ? "activo" : ""}" data-doc-vista="carrusel">▤ Carrusel</button>
+          </div>
+          <button type="button" class="boton" data-abrir-modal="masiva"><i data-lucide=upload class=ico></i> Carga masiva</button>
+          <button type="button" class="boton-texto-chico" data-abrir-modal="otro">+ Documento adicional</button>
+        </div>
+      </header>
+      ${vistaDocumentos === "carrusel" ? carruselCuerpoHtml(e.fotos, docs.anio) : rejillaDocumentosHtml(e.fotos, docs.anio)}
+      <input type="file" id="doc-carrusel-input-archivo" accept="image/*,application/pdf" style="display:none" />
+    </section>
+    ${otrosDocumentosHtml(e.fotos)}`;
+}
+
+// Solo lectura para el director de grupo: mismo catálogo de categorías y
+// miniaturas que panelDocumentosHtml, sin ningún control de carga/reemplazo/
+// eliminación (esos siguen siendo exclusivos de Administración/Secretaría).
+function panelDocumentosSoloLecturaHtml(e, docs) {
+  const tarjetas = CATEGORIAS_DOCUMENTO.map((cat) => {
+    const foto = fotoParaCategoria(e.fotos, cat, docs.anio);
+    return `
+      <article class="est-doc-card ${foto ? "ok" : "falta"}">
+        <div class="est-doc-thumb">
+          ${
+            foto
+              ? `<a href="/api/fotos/${foto.id}/archivo" target="_blank" title="Abrir documento">
+                   ${imagenConEstadoHtml(`/api/fotos/${foto.id}/miniatura`, cat.nombre)}
+                   ${foto.es_pdf ? '<span class="foto-badge-pdf">PDF</span>' : ""}
+                 </a>`
+              : '<span class="est-doc-thumb-vacio"><i data-lucide=file-text class=ico></i> </span>'
+          }
+        </div>
+        <div class="est-doc-cuerpo">
+          <h4 class="est-doc-nombre">${cat.nombre}</h4>
+          <p class="est-doc-estado">${foto ? '<span class="est-chip ok"><i data-lucide=check class=ico></i> Cargado</span>' : '<span class="est-chip pendiente"><i data-lucide=triangle-alert class=ico></i> Pendiente</span>'}</p>
+          ${foto ? `<a class="boton secundario boton-chico" href="/api/fotos/${foto.id}/archivo" target="_blank"><i data-lucide=eye class=ico></i> Ver</a>` : ""}
+        </div>
+      </article>`;
+  }).join("");
+  return `
+    <section class="est-bloque est-bloque-ancho">
+      <header class="est-doc-barra">
+        <div class="est-doc-barra-titulo">
+          <h3>Documentos de matrícula</h3>
+          <p class="est-bloque-desc">${docs.cargados} de ${docs.total} cargados · solo lectura</p>
+        </div>
+      </header>
+      <div class="est-doc-grid">${tarjetas}</div>
+    </section>`;
+}
+
+function panelMatriculaHtml(e, nombreCompleto) {
+  return `
+    <div class="est-columnas">
+      <div class="est-columna-principal">
+        <div data-ficha-riesgo></div>
+        <section class="est-documento-oficial">
+          <div class="est-documento-icono"><i data-lucide=clipboard-list class=ico></i> </div>
+          <div class="est-documento-info">
+            <h3>Ficha de matrícula</h3>
+            <p class="est-documento-sub">Formato oficial de la institución · ${esc(nombreCompleto)}</p>
+            <p class="est-bloque-desc">
+              Es el documento oficial y no se puede modificar su formato. Al abrirlo se escribe directamente
+              sobre las casillas; revisa especialmente el <strong>Grado año 2026</strong> (número, Preescolar = 0).
+              Lo que escribas (acudiente, comunidad, etnia, discapacidad, lugar de expedición…) se guarda en el
+              estudiante al descargar el Word o al pulsar «Guardar», y vuelve a aparecer el próximo año.
+            </p>
+            <div class="est-documento-acciones">
+              <button type="button" class="boton" data-ficha-accion="abrir">Abrir ficha</button>
+              <button type="button" class="boton secundario" data-ficha-accion="word">Descargar Word (.docx)</button>
+              <button type="button" class="boton secundario" data-ficha-accion="pdf">Descargar PDF</button>
+              <button type="button" class="boton secundario" data-ficha-accion="imprimir">Imprimir</button>
+            </div>
+            <div data-resultado-ficha></div>
+          </div>
+        </section>
+      </div>
+      <aside class="est-columna-lateral">
+        <section class="est-bloque est-bloque-lateral">
+          <header class="est-bloque-head"><h3>Páginas escaneadas</h3></header>
+          <p class="est-bloque-desc">La ficha firmada se archiva como documento escaneado en estas dos categorías.</p>
+          <ul class="est-pendientes est-lista-estado">
+            ${CATEGORIAS_DOCUMENTO.slice(0, 2)
+              .map((c) => {
+                const f = fotoParaCategoria(e.fotos, c, fichaDocAnioSeleccionado ?? new Date().getFullYear());
+                return `<li>${f ? '<span class="est-chip ok"><i data-lucide=check class=ico></i> </span>' : '<span class="est-chip pendiente"><i data-lucide=triangle-alert class=ico></i> </span>'} ${c.nombre}</li>`;
+              })
+              .join("")}
+          </ul>
+          <button type="button" class="boton secundario est-boton-ancho" data-ir-sub="documentos">Ir a documentos</button>
+        </section>
+      </aside>
+    </div>`;
+}
+
+function panelConstanciasHtml(e, opciones, hoy) {
+  return `
+    <section class="est-bloque est-bloque-ancho">
+      <header class="est-bloque-head">
+        <h3>Generar constancia de estudio</h3>
+        <p class="est-bloque-desc">Queda guardada en el registro de constancias al generarla.</p>
+      </header>
+      <div class="constancia-editor">
+        <form id="form-constancia" class="form-grid form-grid-bloque">
+          <label>Lugar de expedición (para el texto de la constancia)
+            <input type="text" name="lugar_expedicion" value="${esc(e.lugar_expedicion_documento || "")}" required />
+          </label>
+          <label>Jornada
+            <input type="text" name="jornada" value="Diurna" />
+          </label>
+          <label>Año escolar
+            <input type="number" name="anio_escolar" value="${new Date().getFullYear()}" />
+          </label>
+          <label>Fecha de expedición
+            <input type="date" name="fecha_expedicion" value="${hoy}" />
+          </label>
+          <label class="ancho-completo">Válido para
+            <select name="proposito_select" id="proposito_select">
+              ${opciones.propositos.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join("")}
+              <option value="__otro__">Otro (especificar)</option>
+            </select>
+          </label>
+          <label class="ancho-completo" id="campo-proposito-otro" style="display:none">
+            Especifica el propósito
+            <input type="text" name="proposito_otro" />
+          </label>
+          <div class="ancho-completo"><button type="submit" class="boton">Generar constancia</button></div>
+        </form>
+        <div>
+          <p class="est-subtitulo-mini">Vista previa (aproximada, el Word/PDF real lleva el formato oficial completo)</p>
+          <div id="preview-constancia"></div>
+        </div>
+      </div>
+      <div id="resultado-constancia"></div>
+    </section>`;
+}
+
+// --- Visor de la ficha oficial ---------------------------------------------
+// Contenedor externo rediseñable; el documento de dentro (#ficha-hoja) se
+// inyecta tal cual desde static/ficha_matricula.html y NO se modifica.
+
+function visorFichaHtml(e, nombreCompleto) {
+  const zoom = Number(leerPreferencia("ietaba_zoom_ficha", "130")) || 130;
+  return `
+    <div class="est-visor" id="ficha-visor" ${fichaVisorAbierto ? "" : "hidden"} role="dialog" aria-label="Ficha de matrícula">
+      <header class="est-visor-barra">
+        <div class="est-visor-titulo">
+          <strong>Ficha de matrícula</strong>
+          <span>${esc(nombreCompleto)} · Doc. ${esc(e.documento)}</span>
+        </div>
+        <div class="est-visor-controles">
+          <div class="est-visor-zoom">
+            <button type="button" class="est-visor-zoom-btn" data-zoom-paso="-10" aria-label="Alejar">−</button>
+            <input type="range" id="zoom-ficha" min="60" max="200" step="5" value="${zoom}" aria-label="Zoom" />
+            <button type="button" class="est-visor-zoom-btn" data-zoom-paso="10" aria-label="Acercar">+</button>
+            <span id="zoom-ficha-valor">${zoom}%</span>
+          </div>
+          <button type="button" class="boton" data-ficha-accion="guardar">Guardar en el estudiante</button>
+          <button type="button" class="boton secundario" data-ficha-accion="word">Word</button>
+          <button type="button" class="boton secundario" data-ficha-accion="pdf">PDF</button>
+          <button type="button" class="boton secundario" data-ficha-accion="imprimir">Imprimir</button>
+          <button type="button" class="est-visor-cerrar" id="btn-cerrar-visor" aria-label="Cerrar"></button>
+        </div>
+      </header>
+      <div class="est-visor-avisos">
+        <div data-ficha-riesgo="compacto"></div>
+        <div data-resultado-ficha></div>
+      </div>
+      <div class="est-visor-lienzo">
+        <div class="ficha-hoja-contenedor" id="ficha-contenedor"><p>Cargando ficha...</p></div>
+      </div>
+    </div>`;
+}
+
+// --- Modales de documentos --------------------------------------------------
+// Viven siempre en el DOM (ocultos) para que los bindings de subida masiva y
+// de documento adicional no dependan de abrirlos.
+
+function modalesDocumentosHtml() {
+  return `
+    <div class="modal-fondo est-modal" id="modal-carga-masiva" ${fichaModalAbierto === "masiva" ? "" : "hidden"} role="dialog" aria-label="Carga masiva de documentos">
+      <div class="modal-caja modal-caja-ancha">
+        <header class="est-modal-head">
+          <h3>Carga masiva de documentos</h3>
+          <button type="button" class="est-visor-cerrar" data-cerrar-modal aria-label="Cerrar"></button>
+        </header>
+        <p class="est-bloque-desc">
           Ideal si ya escaneaste varias páginas con el celular (ej. con Adobe Scan o Microsoft 365):
-          elige todos los archivos juntos y aquí les asignas la categoría a cada uno, en vez de entrar
-          categoría por categoría arriba.
+          elige todos los archivos juntos y aquí le asignas la categoría a cada uno. Si un archivo es un
+          PDF de varias páginas, cada página entra por separado y eliges cuáles usar.
         </p>
-        <label class="boton secundario" style="cursor:pointer; display:inline-block">
+        <label class="boton secundario est-label-archivo">
           Elegir varios archivos...
           <input type="file" id="input-subida-masiva" accept="image/*,application/pdf" multiple style="display:none" />
         </label>
         <div id="lista-subida-masiva"></div>
-      </details>
-      <details class="seccion-colapsable" style="margin-top:14px">
-        <summary>+ Agregar otro documento (fuera de las categorías de arriba)</summary>
-        <form id="form-subir-foto" class="form-grid no-imprimir">
+      </div>
+    </div>
+
+    <div class="modal-fondo est-modal" id="modal-doc-adicional" ${fichaModalAbierto === "otro" ? "" : "hidden"} role="dialog" aria-label="Agregar documento adicional">
+      <div class="modal-caja">
+        <header class="est-modal-head">
+          <h3>Agregar documento adicional</h3>
+          <button type="button" class="est-visor-cerrar" data-cerrar-modal aria-label="Cerrar"></button>
+        </header>
+        <p class="est-bloque-desc">Para documentos fuera de las ${CATEGORIAS_DOCUMENTO.length} categorías de matrícula.</p>
+        <form id="form-subir-foto" class="form-grid form-grid-bloque no-imprimir">
           <label class="ancho-completo">Nombre del documento
             <input type="text" name="etiqueta_otro" placeholder="Ej: Certificado médico" required />
           </label>
@@ -569,97 +1306,217 @@ async function renderFicha() {
           <div class="ancho-completo"><button type="submit" class="boton">Subir documento</button></div>
         </form>
         <div id="resultado-foto"></div>
-      </details>
-    </details>
-
-    <details class="seccion-colapsable" open>
-      <summary>Generar constancia de estudio</summary>
-      <div class="constancia-editor">
-        <form id="form-constancia" class="form-grid">
-          <label>Lugar de expedición (para el texto de la constancia)
-            <input type="text" name="lugar_expedicion" value="${e.lugar_expedicion_documento || ""}" required />
-          </label>
-          <label>Jornada
-            <input type="text" name="jornada" value="Diurna" />
-          </label>
-          <label>Año escolar
-            <input type="number" name="anio_escolar" value="${new Date().getFullYear()}" />
-          </label>
-          <label>Fecha de expedición
-            <input type="date" name="fecha_expedicion" value="${hoy}" />
-          </label>
-          <label class="ancho-completo">Válido para
-            <select name="proposito_select" id="proposito_select">
-              ${opciones.propositos.map((p) => `<option value="${p}">${p}</option>`).join("")}
-              <option value="__otro__">Otro (especificar)</option>
-            </select>
-          </label>
-          <label class="ancho-completo" id="campo-proposito-otro" style="display:none">
-            Especifica el propósito
-            <input type="text" name="proposito_otro" />
-          </label>
-          <div class="ancho-completo"><button type="submit" class="boton">Generar constancia</button></div>
-        </form>
-        <div>
-          <p class="pendiente" style="margin-top:0">Vista previa (aproximada, el Word/PDF real lleva el formato oficial completo)</p>
-          <div id="preview-constancia"></div>
-        </div>
       </div>
-      <div id="resultado-constancia"></div>
-    </details>
+    </div>`;
+}
+
+// --- Abrir / cerrar superposiciones -----------------------------------------
+
+function bloquearScrollFondo(bloquear) {
+  document.body.style.overflow = bloquear ? "hidden" : "";
+}
+
+function abrirVisorFicha() {
+  const visor = document.getElementById("ficha-visor");
+  if (!visor) return;
+  fichaVisorAbierto = true;
+  visor.hidden = false;
+  bloquearScrollFondo(true);
+}
+
+function cerrarVisorFicha() {
+  const visor = document.getElementById("ficha-visor");
+  fichaVisorAbierto = false;
+  if (visor) visor.hidden = true;
+  if (!fichaModalAbierto) bloquearScrollFondo(false);
+}
+
+function abrirModalFicha(cual) {
+  const modal = document.getElementById(cual === "masiva" ? "modal-carga-masiva" : "modal-doc-adicional");
+  if (!modal) return;
+  fichaModalAbierto = cual;
+  modal.hidden = false;
+  bloquearScrollFondo(true);
+}
+
+function cerrarModalesFicha() {
+  fichaModalAbierto = null;
+  document.querySelectorAll(".est-modal").forEach((m) => { m.hidden = true; });
+  if (!fichaVisorAbierto) bloquearScrollFondo(false);
+}
+
+function irASubvistaFicha(sub) {
+  fichaSub = sub;
+  renderFicha();
+}
+
+// --- Render -----------------------------------------------------------------
+
+async function renderFicha() {
+  app.innerHTML = '<p class="estado-carga">Cargando...</p>';
+  const [e, opciones] = await Promise.all([
+    api(fichaUrlEstudiante(fichaEstudianteId)),
+    fichaModoDocente ? Promise.resolve(null) : api("/api/certificados/opciones"),
+  ]);
+
+  const nombreCompleto = `${e.primer_nombre} ${e.segundo_nombre || ""} ${e.primer_apellido} ${e.segundo_apellido || ""}`
+    .replace(/\s+/g, " ")
+    .trim();
+  const hoy = fechaColombiaISO();
+
+  if (fichaDocEstudianteIdActual !== fichaEstudianteId) {
+    fichaDocEstudianteIdActual = fichaEstudianteId;
+    fichaDocCategoriaIndex = leerIndiceCategoriaGuardado(fichaEstudianteId);
+    fichaDocAnioSeleccionado = null;
+    fichaSub = "resumen";
+    fichaVisorAbierto = false;
+    fichaModalAbierto = null;
+  }
+
+  // Estado de documentación, con los datos reales del estudiante.
+  const anioDocs = fichaDocAnioSeleccionado ?? new Date().getFullYear();
+  const faltantes = categoriasFaltantesOrdenadas(e.fotos, anioDocs);
+  const docs = {
+    anio: anioDocs,
+    total: CATEGORIAS_DOCUMENTO.length,
+    faltantes,
+    cargados: CATEGORIAS_DOCUMENTO.length - faltantes.length,
+    pct: Math.round(((CATEGORIAS_DOCUMENTO.length - faltantes.length) / CATEGORIAS_DOCUMENTO.length) * 100),
+  };
+
+  const paneles = {
+    resumen: () => panelResumenHtml(e, docs),
+    datos: () => panelDatosHtml(e),
+    documentos: () => (fichaModoDocente ? panelDocumentosSoloLecturaHtml(e, docs) : panelDocumentosHtml(e, docs)),
+    matricula: () => panelMatriculaHtml(e, nombreCompleto),
+    constancias: () => panelConstanciasHtml(e, opciones, hoy),
+  };
+  const subvistas = fichaModoDocente
+    ? SUBVISTAS_FICHA.filter((s) => SUBVISTAS_FICHA_DOCENTE.includes(s.id))
+    : SUBVISTAS_FICHA;
+  if (fichaModoDocente && !SUBVISTAS_FICHA_DOCENTE.includes(fichaSub)) fichaSub = "datos";
+
+  app.innerHTML = `
+    <div class="est-detalle">
+      <button class="volver" id="btn-volver-ficha">← Volver</button>
+
+      <header class="est-cabecera">
+        <div class="est-identidad">
+          <span class="est-avatar" aria-hidden="true">${esc(inicialesEstudiante(e))}</span>
+          <div class="est-identidad-texto">
+            <h1 class="est-nombre">${esc(nombreCompleto)}</h1>
+            <p class="est-meta">
+              <span>${esc(nombreGrado(e.grado))}${e.curso !== null ? ` · Curso ${esc(String(e.curso))}` : ""}</span>
+              <span class="est-meta-sep">·</span>
+              <span>${esc(e.sede ? e.sede.nombre : "sin sede")}</span>
+              <span class="est-meta-sep">·</span>
+              <span>Documento: ${esc(e.documento)}</span>
+              <span class="badge ${e.activo ? "activo" : "inactivo"}">${esc((e.estado || "").toLowerCase())}</span>
+              ${docs.faltantes.length ? `<span class="est-chip pendiente">${docs.faltantes.length} doc. pendiente${docs.faltantes.length > 1 ? "s" : ""}</span>` : '<span class="est-chip ok">Documentación completa</span>'}
+            </p>
+          </div>
+        </div>
+        <div class="est-cabecera-acciones">
+          <button type="button" class="boton" data-ficha-accion="abrir"><i data-lucide=clipboard-list class=ico></i> Abrir ficha</button>
+          ${fichaModoDocente ? "" : '<button type="button" class="boton secundario" data-ir-sub="constancias"><i data-lucide=file-text class=ico></i> Constancia</button>'}
+        </div>
+      </header>
+
+      <nav class="subnav-modulo est-tabs" aria-label="Secciones del estudiante">
+        ${subvistas.map(
+          (s) => `<button type="button" class="subnav-item ${fichaSub === s.id ? "activo" : ""}" data-ir-sub="${s.id}">
+                    ${s.nombre}${s.id === "documentos" ? ` <span class="est-tab-contador ${docs.faltantes.length ? "" : "ok"}">${docs.cargados}/${docs.total}</span>` : ""}
+                  </button>`
+        ).join("")}
+      </nav>
+
+      <div id="ficha-aviso">${
+        fichaAviso ? `<div class="${fichaAviso.tipo === "error" ? "alerta-caja" : "exito-caja"}">${esc(fichaAviso.texto)}</div>` : ""
+      }</div>
+
+      <div class="est-panel">${(paneles[fichaSub] || paneles.resumen)()}</div>
+    </div>
+
+    ${visorFichaHtml(e, nombreCompleto)}
+    ${modalesDocumentosHtml()}
   `;
+  fichaAviso = null;
 
   document.getElementById("btn-volver-ficha").addEventListener("click", () => {
+    cerrarVisorFicha();
+    cerrarModalesFicha();
+    fichaModoDocente = false;
     vistaActual = vistaAnterior;
     render();
+  });
+
+  document.querySelectorAll("[data-ir-sub]").forEach((btn) => {
+    btn.addEventListener("click", () => irASubvistaFicha(btn.dataset.irSub));
   });
 
   vincularTipoDocumentoOtro("tipo_documento");
   vincularEstadoPreviews();
   vincularBloqueoFicha();
+  pintarDatosMatriculaGuardados(e);
+  // El director de grupo ve "Datos" en solo lectura: no edita identidad,
+  // grado/curso ni observaciones internas desde el módulo docente — eso
+  // sigue siendo de Administración/Secretaría. Lo único editable para él es
+  // la ficha de matrícula (pestaña «Matrícula», botón "Abrir ficha").
+  if (fichaModoDocente) {
+    document.querySelectorAll("[data-ficha-editar]").forEach((b) => { b.hidden = true; });
+  }
 
-  document.getElementById("form-datos-estudiante").addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const datos = Object.fromEntries(new FormData(ev.target).entries());
-    const cont = document.getElementById("resultado-datos-estudiante");
-    try {
-      await api(`/api/estudiantes/${fichaEstudianteId}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          fecha_nacimiento: datos.fecha_nacimiento || null,
-          genero: datos.genero || null,
-          grado: Number(datos.grado),
-          curso: datos.curso === "" ? null : Number(datos.curso),
-          id_estud: datos.id_estud || null,
-          observaciones: datos.observaciones || null,
-          posible_retirado: ev.target.querySelector('[name="posible_retirado"]').checked,
-        }),
-      });
-      cont.innerHTML = '<div class="exito-caja">Guardado.</div>';
-      await renderFicha();
-    } catch (err) {
-      cont.innerHTML = `<div class="alerta-caja">${err.message}</div>`;
-    }
+  // --- Guardar por bloque (mismo endpoint PATCH, payload parcial) ----------
+  const guardarBloque = (idForm, construirCambios) => {
+    const form = document.getElementById(idForm);
+    if (!form) return;
+    form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const datos = Object.fromEntries(new FormData(ev.target).entries());
+      try {
+        await api(`/api/estudiantes/${fichaEstudianteId}`, {
+          method: "PATCH",
+          body: JSON.stringify(construirCambios(datos, ev.target)),
+        });
+        fichaAviso = { tipo: "exito", texto: "Cambios guardados." };
+        await renderFicha();
+      } catch (err) {
+        document.getElementById(`resultado-${idForm}`).innerHTML = `<div class="alerta-caja">${esc(err.message)}</div>`;
+      }
+    });
+  };
+
+  guardarBloque("form-doc-identidad", (d) => ({
+    tipo_documento: valorTipoDocumento(d, "tipo_documento") || null,
+    documento: d.documento,
+    lugar_expedicion_documento: d.lugar_expedicion_documento || null,
+  }));
+  guardarBloque("form-datos-personales", (d) => ({
+    fecha_nacimiento: d.fecha_nacimiento || null,
+    genero: d.genero || null,
+  }));
+  guardarBloque("form-datos-academicos", (d) => ({
+    grado: Number(d.grado),
+    curso: d.curso === "" ? null : Number(d.curso),
+    id_estud: d.id_estud || null,
+  }));
+  guardarBloque("form-datos-estado", (d, form) => ({
+    observaciones: d.observaciones || null,
+    resguardo: form.querySelector('[name="resguardo"]').checked,
+    posible_retirado: form.querySelector('[name="posible_retirado"]').checked,
+  }));
+
+  // --- Modales de documentos ----------------------------------------------
+  document.querySelectorAll("[data-abrir-modal]").forEach((btn) => {
+    btn.addEventListener("click", () => abrirModalFicha(btn.dataset.abrirModal));
   });
-
-  document.getElementById("form-doc-identidad").addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const datos = Object.fromEntries(new FormData(ev.target).entries());
-    const cont = document.getElementById("resultado-doc-identidad");
-    try {
-      await api(`/api/estudiantes/${fichaEstudianteId}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          tipo_documento: valorTipoDocumento(datos, "tipo_documento") || null,
-          documento: datos.documento,
-          lugar_expedicion_documento: datos.lugar_expedicion_documento || null,
-        }),
-      });
-      cont.innerHTML = '<div class="exito-caja">Guardado.</div>';
-      await renderFicha();
-    } catch (err) {
-      cont.innerHTML = `<div class="alerta-caja">${err.message}</div>`;
-    }
+  document.querySelectorAll("[data-cerrar-modal]").forEach((btn) => {
+    btn.addEventListener("click", cerrarModalesFicha);
+  });
+  document.querySelectorAll(".est-modal").forEach((modal) => {
+    modal.addEventListener("click", (ev) => {
+      if (ev.target === modal) cerrarModalesFicha();
+    });
   });
 
   const actualizarCampoAnioLectivo = () => {
@@ -683,10 +1540,12 @@ async function renderFicha() {
         const cuerpo = await res.json().catch(() => ({}));
         throw new Error(cuerpo.detail || "No se pudo subir el documento");
       }
-      cont.innerHTML = "";
+      cerrarModalesFicha();
+      fichaSub = "documentos";
+      fichaAviso = { tipo: "exito", texto: "Documento subido." };
       await renderFicha();
     } catch (err) {
-      cont.innerHTML = `<div class="alerta-caja">${err.message}</div>`;
+      cont.innerHTML = `<div class="alerta-caja">${esc(err.message)}</div>`;
     }
   });
 
@@ -698,7 +1557,7 @@ async function renderFicha() {
     });
   });
 
-  // --- Carrusel / lista de documentos por categoría ----------------------
+  // --- Carrusel / rejilla de documentos por categoría ----------------------
   const n = CATEGORIAS_DOCUMENTO.length;
   document.getElementById("doc-carrusel-prev")?.addEventListener("click", () => {
     fichaDocCategoriaIndex = (fichaDocCategoriaIndex - 1 + n) % n;
@@ -741,7 +1600,7 @@ async function renderFicha() {
       inputArchivoCarrusel.click();
     });
   });
-  inputArchivoCarrusel.addEventListener("change", async () => {
+  inputArchivoCarrusel?.addEventListener("change", async () => {
     const archivo = inputArchivoCarrusel.files[0];
     const accion = fichaDocAccionPendiente;
     if (!archivo || !accion) return;
@@ -797,7 +1656,7 @@ async function renderFicha() {
     const nSinAsignar = archivosSubidaMasiva.length - nAsignados;
 
     cont.innerHTML = `
-      <table style="margin-top:10px">
+      <table class="est-tabla-masiva">
         <thead><tr><th></th><th>Archivo</th><th>Categoría</th><th></th></tr></thead>
         <tbody>
           ${archivosSubidaMasiva
@@ -809,17 +1668,17 @@ async function renderFicha() {
               <td>${
                 item.previewUrl
                   ? imagenConEstadoHtml(item.previewUrl, "", "doc-preview-chico")
-                  : '<span style="font-size:22px">📄</span>'
+                  : '<span style="font-size:22px"><i data-lucide=file-text class=ico></i> </span>'
               }</td>
-              <td style="font-size:12.5px; max-width:190px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap" title="${nombreMostrado}">${nombreMostrado}</td>
+              <td class="est-celda-archivo" title="${esc(nombreMostrado)}">${esc(nombreMostrado)}</td>
               <td>
                 <select data-subida-categoria="${i}">
                   <option value="" ${!item.categoria ? "selected" : ""}>No incluir (descartar)</option>
                   ${CATEGORIAS_DOCUMENTO.map((c) => `<option value="${c.nombre}" ${c.nombre === item.categoria ? "selected" : ""}>${c.nombre}</option>`).join("")}
                 </select>
-                ${item.categoria && conteoPorCategoria[item.categoria] > 1 ? '<div class="pendiente" style="color:var(--rojo); font-size:11px">⚠ repetida con otro archivo de la lista</div>' : ""}
+                ${item.categoria && conteoPorCategoria[item.categoria] > 1 ? '<div class="pendiente" style="color:var(--rojo); font-size:11px"><i data-lucide=triangle-alert class=ico></i> repetida con otro archivo de la lista</div>' : ""}
               </td>
-              <td><button type="button" class="boton secundario boton-chico" data-subida-quitar="${i}">✕</button></td>
+              <td><button type="button" class="boton secundario boton-chico" data-subida-quitar="${i}"><i data-lucide=x class=ico></i> </button></td>
             </tr>`;
             })
             .join("")}
@@ -856,7 +1715,7 @@ async function renderFicha() {
       for (let i = 0; i < paraSubir.length; i++) {
         const item = paraSubir[i];
         const nombreMostrado = item.tipo === "pdf-pagina" ? `${item.nombreOrigen} pág. ${item.numeroPagina}` : item.file.name;
-        resultado.innerHTML = `<p class="pendiente">Subiendo ${i + 1} de ${paraSubir.length}: ${nombreMostrado}...</p>`;
+        resultado.innerHTML = `<p class="pendiente">Subiendo ${i + 1} de ${paraSubir.length}: ${esc(nombreMostrado)}...</p>`;
         const categoriaInfo = CATEGORIAS_DOCUMENTO.find((c) => c.nombre === item.categoria);
         try {
           let archivo, nombreArchivo;
@@ -869,12 +1728,16 @@ async function renderFicha() {
           }
           await subirDocumentoCategoria(item.categoria, categoriaInfo?.permanente || false, null, archivo, nombreArchivo);
         } catch (err) {
-          resultado.innerHTML = `<div class="alerta-caja">Error subiendo "${nombreMostrado}": ${err.message}. Se detuvo aquí — los anteriores ya quedaron guardados, intenta de nuevo con los que faltan.</div>`;
+          resultado.innerHTML = `<div class="alerta-caja">Error subiendo "${esc(nombreMostrado)}": ${esc(err.message)}. Se detuvo aquí — los anteriores ya quedaron guardados, intenta de nuevo con los que faltan.</div>`;
           boton.disabled = false;
           return;
         }
       }
+      const subidos = paraSubir.length;
       archivosSubidaMasiva = [];
+      cerrarModalesFicha();
+      fichaSub = "documentos";
+      fichaAviso = { tipo: "exito", texto: `${subidos} documento(s) subido(s).` };
       await renderFicha();
     });
   }
@@ -909,8 +1772,8 @@ async function renderFicha() {
         }
       }
       const yaUsadas = new Set(archivosSubidaMasiva.map((x) => x.categoria).filter(Boolean));
-      const faltantes = categoriasFaltantesOrdenadas(e.fotos, anio).filter((c) => !yaUsadas.has(c.nombre));
-      const sugerida = faltantes[0] || null;
+      const faltantesAhora = categoriasFaltantesOrdenadas(e.fotos, anio).filter((c) => !yaUsadas.has(c.nombre));
+      const sugerida = faltantesAhora[0] || null;
       archivosSubidaMasiva.push({
         tipo: "imagen",
         file,
@@ -921,52 +1784,144 @@ async function renderFicha() {
     pintarListaSubidaMasiva();
   });
 
-  const formConstancia = document.getElementById("form-constancia");
+  // --- Ficha oficial: visor, zoom y acciones ------------------------------
+  document.getElementById("zoom-ficha").addEventListener("input", aplicarZoomFicha);
+  document.querySelectorAll("[data-zoom-paso]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const control = document.getElementById("zoom-ficha");
+      const nuevo = Number(control.value) + Number(btn.dataset.zoomPaso);
+      control.value = String(Math.min(Number(control.max), Math.max(Number(control.min), nuevo)));
+      aplicarZoomFicha();
+    });
+  });
+  document.getElementById("btn-cerrar-visor").addEventListener("click", cerrarVisorFicha);
 
-  const actualizarPreview = () => {
-    const datos = Object.fromEntries(new FormData(formConstancia).entries());
-    datos.proposito = datos.proposito_select === "__otro__" ? datos.proposito_otro : datos.proposito_select;
-    document.getElementById("preview-constancia").innerHTML = previsualizarConstancia(e, nombreCompleto, datos);
+  cargarHojaFicha(e);
+  cargarRiesgoFicha(e);
+  document.getElementById("ficha-contenedor").addEventListener("input", () => programarEvaluacionFicha(e));
+  if (fichaVisorAbierto) bloquearScrollFondo(true);
+
+  const descargarFicha = async (formato) => {
+    pintarResultadoFicha("<p>Generando...</p>");
+    let avisoGuardado = "";
+    try {
+      await guardarDatosFicha(e);
+      avisoGuardado = " Los datos quedaron guardados en el estudiante.";
+    } catch (err) {
+      avisoGuardado = ` (No se pudieron guardar en el estudiante: ${esc(err.message)}.)`;
+    }
+    const campos = {};
+    document.querySelectorAll("#ficha-hoja input").forEach((i) => { campos[i.name] = i.value; });
+    try {
+      // Devuelve un archivo binario (no JSON): no puede pasar por api().
+      await asegurarSesionFresca();
+      const res = await fetch("/api/certificados/ficha-matricula", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ estudiante_id: e.id, campos, formato }),
+      });
+      if (!res.ok) {
+        const cuerpo = await res.json().catch(() => ({}));
+        throw new Error(cuerpo.detail || `Error ${res.status}`);
+      }
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `Ficha matricula - ${nombreCompleto}.${formato}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      const autorizada = res.headers.get("X-Promocion") === "autorizada";
+      pintarResultadoFicha('<p class="exito-caja">Ficha generada y descargada.' +
+        (autorizada ? " Grado autorizado por coordinación." : "") + avisoGuardado + "</p>");
+    } catch (err) {
+      pintarResultadoFicha(`<p class="alerta-caja">${esc(err.message)}</p>`);
+    }
   };
 
-  document.getElementById("proposito_select").addEventListener("change", (ev) => {
-    document.getElementById("campo-proposito-otro").style.display =
-      ev.target.value === "__otro__" ? "" : "none";
-    actualizarPreview();
-  });
-  formConstancia.addEventListener("input", actualizarPreview);
-  actualizarPreview();
-
-  formConstancia.addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const datos = Object.fromEntries(new FormData(ev.target).entries());
-    const proposito = datos.proposito_select === "__otro__" ? datos.proposito_otro : datos.proposito_select;
-    const cont = document.getElementById("resultado-constancia");
-    cont.innerHTML = "<p>Generando (la conversión a PDF puede tardar unos segundos)...</p>";
+  const guardarFichaEnEstudiante = async () => {
     try {
-      const registro = await api("/api/certificados/constancia", {
-        method: "POST",
-        body: JSON.stringify({
-          estudiante_id: fichaEstudianteId,
-          lugar_expedicion: datos.lugar_expedicion,
-          jornada: datos.jornada,
-          anio_escolar: Number(datos.anio_escolar),
-          fecha_expedicion: datos.fecha_expedicion,
-          proposito,
-        }),
-      });
-      cont.innerHTML = `
-        <div class="exito-caja">
-          Constancia generada y guardada en el registro.
-          <a class="boton secundario" href="/api/certificados/${registro.id}/archivo?formato=docx">Descargar Word</a>
-          ${
-            registro.archivo_pdf
-              ? `<a class="boton secundario" href="/api/certificados/${registro.id}/archivo?formato=pdf">Descargar PDF</a>`
-              : '<span class="pendiente">(no se pudo generar PDF)</span>'
-          }
-        </div>`;
+      await guardarDatosFicha(e);
+      pintarResultadoFicha('<p class="exito-caja">Datos guardados en el estudiante.</p>');
+      pintarDatosMatriculaGuardados(e);
     } catch (err) {
-      cont.innerHTML = `<div class="alerta-caja">${err.message}</div>`;
+      pintarResultadoFicha(`<p class="alerta-caja">No se pudo guardar: ${esc(err.message)}</p>`);
     }
+  };
+
+  // Un solo lugar para las acciones de la ficha: los mismos botones aparecen
+  // en el Resumen, en el panel de Matrícula y en la barra del visor.
+  document.querySelectorAll("[data-ficha-accion]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const accion = btn.dataset.fichaAccion;
+      // Generar o imprimir con un grado que necesita permiso de coordinación
+      // (y no lo tiene aprobado) no se deja — ver promocionPermiteGenerar().
+      if (["imprimir", "pdf", "word"].includes(accion) && !(await promocionPermiteGenerar(e))) return;
+      if (accion === "abrir") abrirVisorFicha();
+      else if (accion === "imprimir") imprimirFicha();
+      else if (accion === "pdf") descargarFicha("pdf");
+      else if (accion === "word") descargarFicha("docx");
+      else if (accion === "guardar") guardarFichaEnEstudiante();
+    });
   });
+
+  // --- Constancia ---------------------------------------------------------
+  const formConstancia = document.getElementById("form-constancia");
+  if (formConstancia) {
+    const actualizarPreview = () => {
+      const datos = Object.fromEntries(new FormData(formConstancia).entries());
+      datos.proposito = datos.proposito_select === "__otro__" ? datos.proposito_otro : datos.proposito_select;
+      document.getElementById("preview-constancia").innerHTML = previsualizarConstancia(e, nombreCompleto, datos);
+    };
+
+    document.getElementById("proposito_select").addEventListener("change", (ev) => {
+      document.getElementById("campo-proposito-otro").style.display =
+        ev.target.value === "__otro__" ? "" : "none";
+      actualizarPreview();
+    });
+    formConstancia.addEventListener("input", actualizarPreview);
+    actualizarPreview();
+
+    formConstancia.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const datos = Object.fromEntries(new FormData(ev.target).entries());
+      const proposito = datos.proposito_select === "__otro__" ? datos.proposito_otro : datos.proposito_select;
+      const cont = document.getElementById("resultado-constancia");
+      cont.innerHTML = "<p>Generando (la conversión a PDF puede tardar unos segundos)...</p>";
+      try {
+        const registro = await api("/api/certificados/constancia", {
+          method: "POST",
+          body: JSON.stringify({
+            estudiante_id: fichaEstudianteId,
+            lugar_expedicion: datos.lugar_expedicion,
+            jornada: datos.jornada,
+            anio_escolar: Number(datos.anio_escolar),
+            fecha_expedicion: datos.fecha_expedicion,
+            proposito,
+          }),
+        });
+        cont.innerHTML = `
+          <div class="exito-caja">
+            Constancia generada y guardada en el registro.
+            <a class="boton secundario" href="/api/certificados/${registro.id}/archivo?formato=docx">Descargar Word</a>
+            ${
+              registro.archivo_pdf
+                ? `<a class="boton secundario" href="/api/certificados/${registro.id}/archivo?formato=pdf">Descargar PDF</a>`
+                : '<span class="pendiente">(no se pudo generar PDF)</span>'
+            }
+          </div>`;
+      } catch (err) {
+        cont.innerHTML = `<div class="alerta-caja">${esc(err.message)}</div>`;
+      }
+    });
+  }
 }
+
+// Escape cierra primero el visor de la ficha y luego los modales de
+// documentos (el escáner y la sidebar manejan su propio Escape).
+document.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Escape") return;
+  if (fichaVisorAbierto) cerrarVisorFicha();
+  else if (fichaModalAbierto) cerrarModalesFicha();
+});

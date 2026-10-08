@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>IETABA</title>
-  <link rel="stylesheet" href="/static/style.css?v=f48" />
+  <link rel="stylesheet" href="/static/style.css?v=g11" />
   <!-- Fase 4.0: estilos de las pantallas de autenticación. No se tocó
        style.css (fuera del alcance permitido para esta fase); se reutilizan
        las variables y clases (.form-grid, .boton, .alerta-caja) que ya
@@ -110,7 +110,7 @@
   <div class="app-shell" hidden>
     <header class="topbar-movil no-imprimir">
       <button type="button" id="btn-abrir-sidebar" class="topbar-movil-toggle" aria-label="Abrir menú" aria-expanded="false" aria-controls="sidebar">
-        <span aria-hidden="true">☰</span>
+        <span aria-hidden="true"><i data-lucide=menu class=ico></i> </span>
       </button>
       <div class="marca marca-movil">
         <img src="/static/logos/logo2.jpeg" alt="" class="marca-logo" />
@@ -139,6 +139,19 @@
           </button>
         </div>
         <div class="nav-grupo">
+          <span class="nav-grupo-titulo">Docencia</span>
+          <button data-vista="docente" data-dk-vista="inicio" class="tab" data-permiso="asistencia.registrar">Inicio</button>
+          <button data-vista="docente" data-dk-vista="cursos" class="tab" data-permiso="asistencia.registrar">Mis cursos</button>
+          <button data-vista="docente" data-dk-vista="asistencia-elegir" class="tab" data-permiso="asistencia.registrar">Asistencia</button>
+          <button data-vista="docente" data-dk-vista="historial" class="tab" data-permiso="asistencia.ver_propia">Historial</button>
+        </div>
+        <div class="nav-grupo">
+          <span class="nav-grupo-titulo">Orientación</span>
+          <button data-vista="orientacion" data-or-vista="bandeja" class="tab" data-permiso="observaciones.ver_confidenciales">Bandeja</button>
+          <button data-vista="orientacion" data-or-vista="diagnostico-grados" class="tab" data-permiso="diagnosticos.ver">Por grado</button>
+          <button data-vista="orientacion" data-or-vista="diagnostico-estudiante" class="tab" data-permiso="diagnosticos.ver">Por estudiante</button>
+        </div>
+        <div class="nav-grupo">
           <span class="nav-grupo-titulo">Gestión</span>
           <button data-vista="sedes" class="tab activo" data-permiso="sedes.ver">Sedes</button>
           <button data-vista="horario" class="tab" data-permiso="horario.ver">Horarios</button>
@@ -146,6 +159,14 @@
           <button data-vista="notas" class="tab" data-permiso="boletines.ver">Notas</button>
           <button data-vista="constancias" class="tab" data-permiso="constancias.ver">Constancias</button>
           <button data-vista="reportes" class="tab" data-permiso="reportes.ver">Reportes</button>
+          <button data-vista="asistencia" class="tab" data-permiso="asistencia.estadisticas">Asistencia</button>
+          <button data-vista="analisis" class="tab" data-permiso="boletines.ver">Análisis académico</button>
+          <button data-vista="icfes" class="tab" data-permiso="boletines.ver">Resultados ICFES</button>
+        </div>
+        <div class="nav-grupo">
+          <span class="nav-grupo-titulo">Administración</span>
+          <button data-vista="alertas" class="tab" data-permiso="alertas.ver">Autorizaciones</button>
+          <button data-vista="admin" class="tab" data-permiso="usuarios.ver">Usuarios</button>
         </div>
       </nav>
 
@@ -172,18 +193,28 @@
        main.js (el viejo, que llamaba render() directo) contra el
        index.html nuevo (donde .app-shell arranca oculto) — esa combinación
        deja la pantalla de "Cargando…" fija para siempre. -->
-  <script src="/static/js/comun.js?v=f48"></script>
-  <script src="/static/js/auth.js?v=f48"></script>
-  <script src="/static/js/core.js?v=f48"></script>
-  <script src="/static/js/sedes.js?v=f48"></script>
-  <script src="/static/js/reportes.js?v=f48"></script>
-  <script src="/static/js/estudiantes.js?v=f48"></script>
-  <script src="/static/js/agregar.js?v=f48"></script>
-  <script src="/static/js/constancias.js?v=f48"></script>
-  <script src="/static/js/boletines.js?v=f48"></script>
-  <script src="/static/js/horario.js?v=f48"></script>
-  <script src="/static/js/scanner.js?v=f48"></script>
-  <script src="/static/js/ficha.js?v=f48"></script>
-  <script src="/static/js/main.js?v=f48"></script>
+  <script src="/static/vendor/lucide.min.js"></script>
+  <script src="/static/js/comun.js?v=g8"></script>
+  <script src="/static/js/auth.js?v=g8"></script>
+  <script src="/static/js/core.js?v=g11"></script>
+  <script src="/static/js/sedes.js?v=g8"></script>
+  <script src="/static/js/reportes.js?v=g8"></script>
+  <script src="/static/js/estudiantes.js?v=g8"></script>
+  <script src="/static/js/agregar.js?v=g8"></script>
+  <script src="/static/js/constancias.js?v=g8"></script>
+  <script src="/static/js/boletines.js?v=g8"></script>
+  <script src="/static/js/horario.js?v=g8"></script>
+  <script src="/static/js/horario_consulta.js?v=g8"></script>
+  <script src="/static/js/scanner.js?v=g8"></script>
+  <script src="/static/js/ficha.js?v=g8"></script>
+  <script src="/static/js/admin.js?v=g8"></script>
+  <script src="/static/js/alertas.js?v=g8"></script>
+  <script src="/static/js/asistencia.js?v=g8"></script>
+  <script src="/static/vendor/chart.umd.min.js"></script>
+  <script src="/static/js/analisis.js?v=g12"></script>
+  <script src="/static/js/icfes.js?v=g12"></script>
+  <script src="/static/js/docente.js?v=g8"></script>
+  <script src="/static/js/orientacion.js?v=g8"></script>
+  <script src="/static/js/main.js?v=g8"></script>
 </body>
 </html>

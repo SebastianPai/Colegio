@@ -38,15 +38,13 @@ _copiar(ORIGEN, COPIA)
 os.environ["IETABA_DB_PATH"] = str(COPIA)
 sys.path.insert(0, str(BACKEND))
 
-from fastapi import HTTPException  # noqa: E402
 from sqlalchemy import select, text  # noqa: E402
 from sqlalchemy.exc import IntegrityError  # noqa: E402
 
 print(f"Copia de prueba: {COPIA}\n\n[0] Arranque de la app sobre la copia (migraciones)")
 from app import main  # noqa: E402,F401  (ejecuta migraciones.ejecutar())
-from app import crud, fechas, horario, migraciones, models, schemas  # noqa: E402
+from app import crud, fechas, horario, migraciones, models  # noqa: E402
 from app.database import DB_PATH, Base, SessionLocal, engine  # noqa: E402
-from app.routers import asistencia as router_asistencia  # noqa: E402
 
 OK = "  \033[92mOK\033[0m"
 FALLO = "  \033[91mFALLO\033[0m"
@@ -170,18 +168,21 @@ verificar("crear un pendiente de boletín con revisión válida funciona", not r
 db.delete(p)
 db.commit()
 verificar("pendiente con revisión inexistente → rechazado", rechaza(db, models.PendienteBoletin(revision_id=999_999_999, tipo="nota")))
+sede_valida = db.scalar(select(models.Sede.id))
+docente_valido = db.scalar(select(models.Docente.id))
+usuario_valido = db.scalar(select(models.Usuario.id))
+# El módulo de asistencia por bloque (permisos, ventana de corrección,
+# idempotencia, auditoría) tiene su propia prueba dedicada:
+# probar_asistencia_observaciones.py. Aquí solo se confirma el cimiento: la
+# FK asistencias.estudiante_id sigue protegida a nivel de base.
 verificar(
     "asistencia de un estudiante inexistente → rechazada",
-    rechaza(db, models.Asistencia(estudiante_id=999_999_999, fecha=dt.date(2026, 9, 10), presente=True)),
+    rechaza(db, models.Asistencia(
+        estudiante_id=999_999_999, sede_id=sede_valida, grado=6, curso=None,
+        fecha=dt.date(2026, 9, 10), estado="presente",
+        docente_id=docente_valido, registrado_por_usuario_id=usuario_valido,
+    )),
 )
-try:
-    router_asistencia.marcar_asistencia(
-        schemas.AsistenciaMarcar(estudiante_id=999_999_999, fecha=dt.date(2026, 9, 10), presente=True), db
-    )
-    estado = "sin error"
-except HTTPException as e:
-    estado = e.status_code
-verificar(f"POST /api/asistencia con estudiante inexistente → {estado}", estado == 404)
 crudo.close()
 
 # ---- 4. Índices -----------------------------------------------------------------------
@@ -272,7 +273,11 @@ verificar(
 nuevo = models.Estudiante(documento="PRUEBA-PASO1", primer_apellido="PRUEBA", primer_nombre="PASO", grado=1, sede_id=1)
 db.add(nuevo)
 db.flush()
-db.add(models.Asistencia(estudiante_id=nuevo.id, fecha=dt.date(2026, 9, 10), presente=False))
+db.add(models.Asistencia(
+    estudiante_id=nuevo.id, sede_id=sede_valida, grado=1, curso=None,
+    fecha=dt.date(2026, 9, 10), estado="ausente",
+    docente_id=docente_valido, registrado_por_usuario_id=usuario_valido,
+))
 db.commit()
 nid = nuevo.id
 verificar("borrar un estudiante sin historial funciona", crud.eliminar_estudiante(db, nid))

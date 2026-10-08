@@ -29,3 +29,6 @@ backend/muestras/
 
 # Estado interno de la herramienta (Claude Code), no del proyecto.
 .claude/
+
+# Descargas crudas del ICFES (resultados con nombres de estudiantes).
+backend/icfes_crudo/

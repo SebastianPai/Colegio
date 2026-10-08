@@ -90,3 +90,37 @@ async function api(path, opciones = {}) {
   if (res.status === 204) return null;
   return res.json();
 }
+
+// --- Íconos (Lucide, vendor/lucide.min.js) --------------------------------------
+// La interfaz usa íconos de línea en vez de emojis. Cualquier
+// <i data-lucide="nombre"></i> que llegue al DOM (por innerHTML en cualquier
+// pantalla) se convierte solo en su <svg>: un MutationObserver lo detecta y
+// llama a lucide.createIcons() una vez por cuadro. Así ninguna vista tiene que
+// acordarse de "pintar los íconos" después de renderizar.
+// Nombres: https://lucide.dev/icons (kebab-case, ej. "triangle-alert").
+
+function icono(nombre, clase) {
+  return `<i data-lucide="${nombre}" class="ico${clase ? " " + clase : ""}" aria-hidden="true"></i>`;
+}
+
+// Punto de estado (verde/amarillo/rojo/gris/naranja/azul) — reemplaza a los
+// círculos de color emoji; se dibuja con CSS (.punto-*).
+function puntoEstado(tono, titulo) {
+  return `<span class="punto punto-${tono}"${titulo ? ` title="${esc(titulo)}"` : ""} aria-hidden="true"></span>`;
+}
+
+let _iconosPendientes = false;
+function _pintarIconos() {
+  _iconosPendientes = false;
+  if (typeof lucide !== "undefined" && document.querySelector("i[data-lucide]")) {
+    lucide.createIcons({ attrs: { "stroke-width": 2 } });
+  }
+}
+if (typeof MutationObserver !== "undefined") {
+  new MutationObserver(() => {
+    if (_iconosPendientes) return;
+    _iconosPendientes = true;
+    requestAnimationFrame(_pintarIconos);
+  }).observe(document.documentElement, { childList: true, subtree: true });
+}
+document.addEventListener("DOMContentLoaded", _pintarIconos);

@@ -24,6 +24,18 @@ function resetearEstadoNavegacion() {
   divisionSeleccionada = null;
   fichaEstudianteId = null;
   vistaAnterior = "estudiantes";
+  if (typeof dkVista !== "undefined") {
+    dkVista = "inicio";
+    dkCursoSel = null;
+    dkEstudianteSel = null;
+    dkBloqueDatos = null;
+  }
+  if (typeof orVista !== "undefined") {
+    orVista = "bandeja";
+    orGradoSel = null;
+    orEstudianteSel = null;
+  }
+  if (typeof fichaModoDocente !== "undefined") fichaModoDocente = false;
   tabs.forEach((t) => t.classList.remove("activo"));
   document.querySelector('[data-vista="sedes"]')?.classList.add("activo");
   app.innerHTML = "";
@@ -39,6 +51,9 @@ const NOMBRES_GRADOS = [
 
 tabs.forEach((tab) => {
   tab.addEventListener("click", () => {
+    if (typeof dkConfirmarSalirSinGuardar !== "undefined" && vistaActual === "docente" && !dkConfirmarSalirSinGuardar()) {
+      return;
+    }
     tabs.forEach((t) => t.classList.remove("activo"));
     tab.classList.add("activo");
     vistaActual = tab.dataset.vista;
@@ -49,6 +64,16 @@ tabs.forEach((tab) => {
       sedeSeleccionada = null;
       gradoSeleccionado = null;
       divisionSeleccionada = null;
+    }
+    if (vistaActual === "docente" && typeof dkVista !== "undefined") {
+      dkVista = tab.dataset.dkVista || "inicio";
+      dkCursoSel = null;
+      dkEstudianteSel = null;
+    }
+    if (vistaActual === "orientacion" && typeof orVista !== "undefined") {
+      orVista = tab.dataset.orVista || "bandeja";
+      orGradoSel = null;
+      orEstudianteSel = null;
     }
     paginaActual = 1;
     mostrarImprimir = false;
@@ -131,14 +156,52 @@ async function renderVistaActual() {
   if (vistaActual === "notas") return renderNotas();
   if (vistaActual === "agregar") return renderAgregar();
   if (vistaActual === "ficha") return renderFicha();
+  if (vistaActual === "admin") return renderAdmin();
+  if (vistaActual === "alertas") return renderAlertas();
+  if (vistaActual === "docente") return renderDocente();
+  if (vistaActual === "orientacion") return renderOrientacion();
+  if (vistaActual === "asistencia") return renderAsistenciaGeneral();
+  if (vistaActual === "analisis") return renderAnalisis();
+  if (vistaActual === "icfes") return renderIcfes();
 }
 
 function abrirFicha(estudianteId, origen) {
   fichaEstudianteId = estudianteId;
   vistaAnterior = origen || vistaActual;
   vistaActual = "ficha";
-  tabs.forEach((t) => t.classList.remove("activo"));
+  // Solo el llamado desde docente.js (director de grupo) pone
+  // fichaModoDocente = true justo antes de invocar esta función; cualquier
+  // otro origen (Listado, Alertas, Reportes...) es siempre modo administrador.
+  if (typeof fichaModoDocente !== "undefined" && origen !== "docente") fichaModoDocente = false;
+  // No se apaga la pestaña del menú: el detalle cuelga de donde se vino
+  // (Listado, Alertas, Reportes) y "Volver" regresa allí. Antes quedaba el
+  // menú sin ninguna sección marcada, también al volver.
   render();
+}
+
+// --- Búsquedas que ignoran tildes y diéresis --------------------------------
+// Muchos nombres del territorio llevan ñ o ü (PEÑA BLANCA, CARAÑO, ÑAMBI,
+// GUIGÜAY) y nadie los escribe así al buscar a las carreras. Se comparan las
+// dos partes sin marcas diacríticas para que "pena blanca" encuentre "PEÑA
+// BLANCA". La ñ se conserva como n, que es justo lo que se quiere aquí.
+
+function normalizarTexto(valor) {
+  return String(valor ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase();
+}
+
+// --- Permisos en la interfaz -----------------------------------------------
+// NUNCA es seguridad: el backend vuelve a comprobar cada permiso (las rutas
+// de /api/admin/* responden 403). Esto solo evita ofrecer acciones que la
+// persona no va a poder completar. sesionActual lo llena auth.js desde
+// /api/auth/yo. A diferencia de _aplicarVisibilidadPorPermisos(), que corre
+// una sola vez al entrar sobre el HTML estático, esto sirve para el HTML que
+// cada vista pinta después.
+
+function tienePermiso(codigo) {
+  return !!(typeof sesionActual !== "undefined" && sesionActual?.usuario?.permisos?.includes(codigo));
 }
 
 // --- Helpers: tipo de documento con opción "Otro" (Agregar + Ficha) --------
@@ -195,6 +258,26 @@ function membreteHtml(titulo) {
     </div>
   `;
 }
+
+// --- Menús desplegables que se cierran solos ---------------------------------
+// El "⋮" de cada fila y el "Más filtros" son <details>: el navegador no los
+// cierra al hacer clic fuera, así que se quedaban abiertos, y podían quedar
+// varios a la vez. Fase de captura (true) porque el menú de fila frena la
+// propagación de sus clics y un listener normal en document nunca los vería.
+const SELECTOR_MENUS_AUTOCIERRE = "details.menu-fila[open], details.menu-mas-filtros[open]";
+
+document.addEventListener(
+  "click",
+  (ev) => {
+    document.querySelectorAll(SELECTOR_MENUS_AUTOCIERRE).forEach((d) => {
+      if (!d.contains(ev.target)) d.open = false;
+    });
+  },
+  true
+);
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") document.querySelectorAll(SELECTOR_MENUS_AUTOCIERRE).forEach((d) => (d.open = false));
+});
 
 // --- Ícono de ayuda "(?)" reutilizable --------------------------------------
 // Para explicar en lenguaje simple qué significa un término técnico (ej.

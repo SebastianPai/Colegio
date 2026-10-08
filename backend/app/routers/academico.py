@@ -6,7 +6,10 @@ from sqlalchemy.orm import Session
 
 from .. import (
     auditoria_continuidad,
+    auth,
     auth_servicio,
+    comparacion_academica,
+    evaluacion_docente,
     crud,
     generacion_boletines,
     grilla_sapred,
@@ -651,6 +654,250 @@ def exportar_reporte_notas(
     )
 
 
+@router.get("/boletines/tendencia-notas", response_model=schemas.ReporteTendencia)
+def obtener_tendencia_notas(
+    anio_lectivo: int | None = None,
+    sede_id: int | None = None,
+    grado: int | None = None,
+    umbral_bajo: float = 3.0,
+    periodos_minimo: int = 2,
+    _obs=Depends(rbac.observar("boletines.ver")),
+    db: Session = Depends(get_db),
+):
+    """Estudiante+área con notas bajas SOSTENIDAS a través de varios
+    períodos (no solo uno) — para avisar a tiempo, no para decidir
+    "perdió el año": esa determinación la hace el colegio con sus propias
+    reglas de promoción, no este reporte."""
+    return reporte_notas.reporte_tendencia(
+        db, anio_lectivo=anio_lectivo or dt.date.today().year,
+        sede_id=sede_id, grado=grado, umbral_bajo=umbral_bajo, periodos_minimo=periodos_minimo,
+    )
+
+
+# --- Análisis comparativo entre períodos (Período A -> Período B) -----------
+# Genérico en períodos a propósito: base/comparado son siempre (anio, periodo)
+# — nunca "P1" ni "P2" hardcodeados — para que funcione igual el día que
+# existan P3/P4 sin tocar este archivo. Ver comparacion_academica.py.
+
+
+def _parametros_comparacion(
+    anio_base: int, periodo_base: int, anio_comparado: int, periodo_comparado: int,
+    sede_id: int | None = None, grado: int | None = None, curso: int | None = None,
+    area_id: int | None = None, docente_id: int | None = None, estado: str | None = "ACTIVO",
+    escala_min: float = 1.0, escala_max: float = 5.0,
+    nivel_bajo_hasta: float = 2.9, nivel_basico_hasta: float = 3.9, nivel_alto_hasta: float = 4.5,
+    umbral_mejora_significativa: float = 1.0, umbral_mejora: float = 0.3,
+    umbral_descenso: float = 0.3, umbral_descenso_significativo: float = 1.0,
+) -> dict:
+    config = schemas.ConfigComparacion(
+        escala_min=escala_min, escala_max=escala_max,
+        nivel_bajo_hasta=nivel_bajo_hasta, nivel_basico_hasta=nivel_basico_hasta, nivel_alto_hasta=nivel_alto_hasta,
+        umbral_mejora_significativa=umbral_mejora_significativa, umbral_mejora=umbral_mejora,
+        umbral_descenso=umbral_descenso, umbral_descenso_significativo=umbral_descenso_significativo,
+    )
+    # "TODOS" (o vacío) = sin filtrar por estado. Antes "Todos" mandaba
+    # estado vacío: el backend volvía a ACTIVO o filtraba por "" (nada).
+    if estado is not None and estado.strip().upper() in ("", "TODOS"):
+        estado = None
+    return {
+        "base": (anio_base, periodo_base), "comparado": (anio_comparado, periodo_comparado),
+        "sede_id": sede_id, "grado": grado, "curso": curso, "area_id": area_id, "docente_id": docente_id,
+        "estado": estado, "config": config,
+    }
+
+
+@router.get("/boletines/comparacion/periodos-disponibles", response_model=list[schemas.PeriodoDisponible])
+def comparacion_periodos_disponibles(
+    _obs=Depends(rbac.observar("boletines.ver")), db: Session = Depends(get_db),
+):
+    """Lo que el selector 'Período base / Período comparado' del dashboard
+    debe ofrecer: solo pares (año, período) que YA tienen datos importados
+    de SAPRED. Nunca un P3 fijo si todavía no existe."""
+    return comparacion_academica.periodos_disponibles(db)
+
+
+@router.get("/boletines/comparacion/resumen", response_model=schemas.ResumenComparacion)
+def comparacion_resumen(
+    p: dict = Depends(_parametros_comparacion),
+    _obs=Depends(rbac.observar("boletines.ver")), db: Session = Depends(get_db),
+):
+    filas = comparacion_academica.comparar(db, **p)
+    disponibles = comparacion_academica.periodos_disponibles(db)
+    pb = comparacion_academica.periodo_disponible(disponibles, *p["base"])
+    pc = comparacion_academica.periodo_disponible(disponibles, *p["comparado"])
+    return comparacion_academica.resumen_global(filas, periodo_base=pb, periodo_comparado=pc, config=p["config"])
+
+
+@router.get("/boletines/comparacion/panorama", response_model=schemas.PanoramaAcademico)
+def comparacion_panorama(
+    p: dict = Depends(_parametros_comparacion),
+    _obs=Depends(rbac.observar("boletines.ver")), db: Session = Depends(get_db),
+):
+    """Todo lo que necesita la pantalla principal del análisis (resumen,
+    lectura, evolución, áreas, grados, grupos, sedes y hallazgos) en una
+    sola llamada: una pasada de comparar() en vez de seis."""
+    return comparacion_academica.panorama_cacheado(db, p)
+
+
+@router.get("/boletines/comparacion/estudiantes", response_model=list[schemas.EstudianteComparacion])
+def comparacion_estudiantes(
+    cambio: str | None = None,
+    p: dict = Depends(_parametros_comparacion),
+    _obs=Depends(rbac.observar("boletines.ver")), db: Session = Depends(get_db),
+):
+    """La lista exacta de estudiantes detrás de cada número del resumen
+    (cambio: posible_retiro | mejoraron | empeoraron | estables | descenso_significativo |
+    entraron_bajo | salieron_bajo | permanecen_bajo | atencion | bajo_actual
+    | sin_comparar)."""
+    filas = comparacion_academica.comparar(db, **p)
+    try:
+        return comparacion_academica.estudiantes_comparacion(filas, p["config"], cambio)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/boletines/comparacion/perder-anio", response_model=schemas.RiesgoAnio)
+def comparacion_perder_anio(
+    p: dict = Depends(_parametros_comparacion),
+    _obs=Depends(rbac.observar("boletines.ver")), db: Session = Depends(get_db),
+):
+    """Quién puede perder el año: por materia, qué promedio necesita en los
+    períodos que faltan del año del período comparado (ver
+    comparacion_academica.riesgo_perder_anio)."""
+    anio, periodo = p["comparado"]
+    return comparacion_academica.riesgo_perder_anio(
+        db, anio_lectivo=anio, hasta_periodo=periodo, sede_id=p["sede_id"], grado=p["grado"], curso=p["curso"],
+        area_id=p["area_id"], estado=p["estado"], config=p["config"],
+    )
+
+
+@router.get("/boletines/comparacion/por-area", response_model=list[schemas.ComparacionPorArea])
+def comparacion_por_area(
+    p: dict = Depends(_parametros_comparacion),
+    _obs=Depends(rbac.observar("boletines.ver")), db: Session = Depends(get_db),
+):
+    """Agrupa por area_id (código SAPRED). Ya no exige sede: verificado en
+    la base real que las sedes comparten los códigos (MATE, COE, LM... son
+    el mismo registro en las 20 sedes); donde una sede usa un código propio
+    (p. ej. DICOG vs COG en preescolar) sale como fila aparte, nunca se
+    mezcla con otra materia."""
+    filas = comparacion_academica.comparar(db, **p)
+    return comparacion_academica.por_area(filas, p["config"])
+
+
+@router.get("/boletines/comparacion/por-grupo", response_model=list[schemas.ComparacionPorGrupo])
+def comparacion_por_grupo(
+    p: dict = Depends(_parametros_comparacion),
+    _obs=Depends(rbac.observar("boletines.ver")), db: Session = Depends(get_db),
+):
+    filas = comparacion_academica.comparar(db, **p)
+    return comparacion_academica.por_grupo(filas, p["config"])
+
+
+@router.get("/boletines/comparacion/por-docente", response_model=list[schemas.ComparacionPorDocente])
+def comparacion_por_docente(
+    p: dict = Depends(_parametros_comparacion),
+    _obs=Depends(rbac.observar("boletines.ver")), db: Session = Depends(get_db),
+):
+    """Descriptivo de los resultados asociados al grupo/área del docente —
+    nunca una evaluación de su desempeño (ver docstring de por_docente)."""
+    filas = comparacion_academica.comparar(db, **p)
+    return comparacion_academica.por_docente(filas)
+
+
+@router.get("/boletines/comparacion/por-sede", response_model=list[schemas.ComparacionPorSede])
+def comparacion_por_sede(
+    p: dict = Depends(_parametros_comparacion),
+    _obs=Depends(rbac.observar("boletines.ver")), db: Session = Depends(get_db),
+):
+    filas = comparacion_academica.comparar(db, **p)
+    return comparacion_academica.por_sede(filas, p["config"])
+
+
+@router.get("/boletines/comparacion/matriz-transicion", response_model=schemas.MatrizTransicion)
+def comparacion_matriz_transicion(
+    p: dict = Depends(_parametros_comparacion),
+    _obs=Depends(rbac.observar("boletines.ver")), db: Session = Depends(get_db),
+):
+    filas = comparacion_academica.comparar(db, **p)
+    return comparacion_academica.matriz_transicion(filas)
+
+
+@router.get("/boletines/comparacion/alertas", response_model=list[schemas.AlertaAcademica])
+def comparacion_alertas(
+    p: dict = Depends(_parametros_comparacion),
+    _obs=Depends(rbac.observar("boletines.ver")), db: Session = Depends(get_db),
+):
+    """Solo seguimiento académico (sección 13): nunca un diagnóstico sobre
+    el estudiante, solo el hecho (nota) y su evidencia."""
+    filas = comparacion_academica.comparar(db, **p)
+    return comparacion_academica.alertas(filas)
+
+
+@router.get("/boletines/comparacion/detalle", response_model=list[schemas.FilaComparacionAcademica])
+def comparacion_detalle(
+    categoria_variacion: str | None = None, nivel_base: str | None = None, nivel_comparado: str | None = None,
+    tipo_cambio: str | None = None, estudiante_id: int | None = None,
+    solo_comparables: bool = True, limite: int = 500,
+    p: dict = Depends(_parametros_comparacion),
+    _obs=Depends(rbac.observar("boletines.ver")), db: Session = Depends(get_db),
+):
+    """El detalle real detrás de cualquier KPI o celda de la matriz de
+    transición: cada porcentaje del dashboard debe poder abrirse hasta
+    aquí (sección 19 — nunca una métrica que no se pueda auditar)."""
+    filas = comparacion_academica.comparar(db, **p)
+    if solo_comparables:
+        filas = [f for f in filas if f.comparable]
+    if categoria_variacion:
+        filas = [f for f in filas if f.categoria_variacion == categoria_variacion]
+    if tipo_cambio == "mejora":  # normal + significativa (el KPI las cuenta juntas)
+        filas = [f for f in filas if f.categoria_variacion in comparacion_academica.MEJORAS]
+    elif tipo_cambio == "descenso":
+        filas = [f for f in filas if f.categoria_variacion in comparacion_academica.DESCENSOS]
+    if estudiante_id is not None:
+        filas = [f for f in filas if f.estudiante_id == estudiante_id]
+    if nivel_base:
+        filas = [f for f in filas if f.nivel_base == nivel_base]
+    if nivel_comparado:
+        filas = [f for f in filas if f.nivel_comparado == nivel_comparado]
+    return filas[:limite]
+
+
+@router.get("/boletines/comparacion/estudiante/{estudiante_id}", response_model=schemas.PerfilAcademicoEstudiante)
+def comparacion_perfil_estudiante(
+    estudiante_id: int, anio_lectivo: int | None = None,
+    _obs=Depends(rbac.observar("boletines.ver")), db: Session = Depends(get_db),
+):
+    """Serie completa del estudiante en el año (todos los períodos con
+    nota, no solo el par base/comparado): en 2026 son P1-P2, pero funciona
+    igual el día que haya P3/P4 sin cambiar nada aquí."""
+    try:
+        return comparacion_academica.perfil_estudiante(db, estudiante_id, anio_lectivo or dt.date.today().year)
+    except comparacion_academica.NoEncontrado as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/boletines/comparacion/exportar")
+def comparacion_exportar(
+    titulo: str | None = None,
+    p: dict = Depends(_parametros_comparacion),
+    _obs=Depends(rbac.observar("boletines.exportar")), db: Session = Depends(get_db),
+):
+    filas = comparacion_academica.comparar(db, **p)
+    disponibles = comparacion_academica.periodos_disponibles(db)
+    pb = comparacion_academica.periodo_disponible(disponibles, *p["base"])
+    pc = comparacion_academica.periodo_disponible(disponibles, *p["comparado"])
+    resumen = comparacion_academica.resumen_global(filas, periodo_base=pb, periodo_comparado=pc, config=p["config"])
+    titulo_final = titulo or f"Análisis académico — Período {pb.periodo} vs Período {pc.periodo} ({pb.anio_lectivo})"
+    datos = comparacion_academica.exportar_comparacion_excel(resumen, filas, titulo_final)
+    nombre_archivo = f"analisis_academico_p{pb.periodo}_p{pc.periodo}_{dt.date.today().isoformat()}.xlsx"
+    return Response(
+        content=datos,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{nombre_archivo}"'},
+    )
+
+
 @router.get("/boletines/sapred-sin-coincidencia", response_model=list[schemas.SapredSinCoincidencia])
 def listar_sapred_sin_coincidencia(
     anio_lectivo: int | None = None,
@@ -699,3 +946,39 @@ def exportar_continuidad_academica(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{nombre_archivo}"'},
     )
+
+
+# --- Evaluación por docente y Desempeño Actitudinal (evaluacion_docente.py) --
+# Indicadores + semáforo, sin nota única ni ranking; solo coordinación y
+# administración (docentes.evaluar) — decisión del colegio, 24/09/2026.
+
+
+@router.get("/boletines/comparacion/docentes", response_model=schemas.EstadoDocentes)
+def evaluacion_docentes(
+    p: dict = Depends(_parametros_comparacion),
+    identidad: auth.Identidad = Depends(rbac.requiere("docentes.evaluar")),
+    db: Session = Depends(get_db),
+):
+    return evaluacion_docente.estado_docentes(db, p)
+
+
+@router.get("/boletines/comparacion/docentes/{docente_id}", response_model=schemas.FichaDocente)
+def evaluacion_un_docente(
+    docente_id: int,
+    p: dict = Depends(_parametros_comparacion),
+    identidad: auth.Identidad = Depends(rbac.requiere("docentes.evaluar")),
+    db: Session = Depends(get_db),
+):
+    ficha = evaluacion_docente.ficha_docente(db, p, docente_id)
+    if ficha is None:
+        raise HTTPException(status_code=404, detail="Docente no encontrado")
+    return ficha
+
+
+@router.get("/boletines/comparacion/actitudinal", response_model=schemas.EstadoActitudinal)
+def comparacion_actitudinal(
+    p: dict = Depends(_parametros_comparacion),
+    _obs=Depends(rbac.observar("boletines.ver")),
+    db: Session = Depends(get_db),
+):
+    return evaluacion_docente.estado_actitudinal(db, p)

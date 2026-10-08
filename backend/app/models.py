@@ -1,6 +1,6 @@
 import datetime as dt
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, String, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from . import fechas
@@ -89,6 +89,10 @@ class Estudiante(Base):
     # (lo garantiza crud.actualizar_estudiante), así todo lo que ya excluye a
     # los posibles retirados de los pendientes también lo excluye a él.
     retirado: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+
+    # True = el estudiante pertenece a un resguardo indígena (lo normal en el
+    # colegio); False = no pertenece a ninguno.
+    resguardo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
 
     sede_id: Mapped[int | None] = mapped_column(ForeignKey("sedes.id"), nullable=True)
     sede: Mapped[Sede | None] = relationship(back_populates="estudiantes")
@@ -342,6 +346,47 @@ class NotaSapred(Base):
     estudiante: Mapped[Estudiante] = relationship()
 
 
+class HallazgoConciliacion(Base):
+    """Historial persistente de discrepancias de GRUPO entre SIMAC y SAPRED
+    (ver conciliacion.py, sección "diferencia" campo="grupo"). La
+    conciliación en sí se recalcula en vivo y no guarda nada — pero eso
+    significa que si alguien corrige el dato en SIMAC, o SAPRED cambia, el
+    caso desaparece del reporte sin dejar rastro de que existió. Esta tabla
+    es la memoria: se crea/actualiza cada vez que corre la conciliación
+    (conciliacion._sincronizar_hallazgos) y NUNCA se borra, solo se marca
+    resuelta — para no perder, de un año a otro, a quién hay que corregirle
+    el grado en la matrícula (promoción anticipada)."""
+
+    __tablename__ = "hallazgos_conciliacion"
+    __table_args__ = (
+        UniqueConstraint("estudiante_id", "anio_lectivo", "periodo", name="uq_hallazgo_estudiante_periodo"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    estudiante_id: Mapped[int] = mapped_column(ForeignKey("estudiantes.id"))
+    anio_lectivo: Mapped[int]
+    periodo: Mapped[int]
+
+    sede_id: Mapped[int] = mapped_column(ForeignKey("sedes.id"))
+    grado_simac: Mapped[int]
+    curso_simac: Mapped[int | None] = mapped_column(nullable=True)
+    grado_sapred: Mapped[int]
+    curso_sapred: Mapped[int | None] = mapped_column(nullable=True)
+    # True si grado_sapred > grado_simac: no es un error de digitación sino
+    # una promoción que ya ocurrió en la práctica (ver conciliacion.py).
+    es_promocion_anticipada: Mapped[bool] = mapped_column(default=False)
+
+    detectado_en: Mapped[dt.datetime] = mapped_column(default=dt.datetime.utcnow)
+    visto_en: Mapped[dt.datetime] = mapped_column(default=dt.datetime.utcnow)
+    resuelto: Mapped[bool] = mapped_column(default=False)
+    resuelto_en: Mapped[dt.datetime | None] = mapped_column(nullable=True)
+    resuelto_por: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    nota: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    estudiante: Mapped["Estudiante"] = relationship()
+    sede: Mapped["Sede"] = relationship()
+
+
 class TextoBoletin(Base):
     """El texto real del CONCEPTO de una área (o de la OBSERVACIÓN del
     director de grupo) tal como sale en el reporte "Boletín informativo" de
@@ -493,18 +538,68 @@ class EstudianteSapredSinCoincidencia(Base):
 
 
 class Asistencia(Base):
+    """Un registro de asistencia de UN estudiante en UNA clase concreta
+    (bloque de horario) o, cuando area_id es NULL, la toma general del día
+    que hace el director de grupo — misma convención area_id=NULL que ya usa
+    AsignacionDocente/BloqueHorario para "todo el grupo, sin materia puntual".
+
+    No se borra nunca una fila para corregirla: se sobrescribe el estado y se
+    deja rastro en AuditoriaCambio (entidad="asistencia"). anulado es un
+    soft-delete (nunca se borra de verdad, para no perder auditoría).
+
+    uuid_cliente es la idempotencia pensada para cuando el registro llegue
+    desde una cola offline (todavía no construida): un mismo uuid nunca crea
+    dos filas, así un reintento de red no duplica nada."""
+
     __tablename__ = "asistencias"
     __table_args__ = (
-        UniqueConstraint("estudiante_id", "fecha", name="uq_asistencia_estudiante_fecha"),
+        # SQLite no trata dos NULL como iguales en un UNIQUE normal (ver la
+        # nota junto a los índices con func.coalesce más abajo en este
+        # archivo) — por eso la unicidad real de esta tabla vive en el índice
+        # ix_asistencia_estudiante_area_fecha_nn, no aquí.
+        UniqueConstraint("uuid_cliente", name="uq_asistencia_uuid_cliente"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    uuid_cliente: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
     estudiante_id: Mapped[int] = mapped_column(ForeignKey("estudiantes.id"))
+    # Redundante con Estudiante.sede_id/grado/curso a propósito: es la foto
+    # del grupo en el momento de tomar la asistencia, para que un traslado
+    # posterior del estudiante no reescriba su historial.
+    sede_id: Mapped[int] = mapped_column(ForeignKey("sedes.id"))
+    grado: Mapped[int]
+    curso: Mapped[int | None] = mapped_column(nullable=True)
+    area_id: Mapped[int | None] = mapped_column(ForeignKey("areas.id"), nullable=True)
+    bloque_horario_id: Mapped[int | None] = mapped_column(ForeignKey("bloques_horario.id"), nullable=True)
+
     fecha: Mapped[dt.date] = mapped_column(Date, default=fechas.hoy_colombia)
-    presente: Mapped[bool] = mapped_column(Boolean, default=True)
-    registrado_en: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+    estado: Mapped[str] = mapped_column(String(20), default="presente")  # presente|ausente|tardanza|excusa
+    observacion: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+    docente_id: Mapped[int] = mapped_column(ForeignKey("docentes.id"))
+    registrado_por_usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"))
+    registrado_en: Mapped[dt.datetime] = mapped_column(DateTime, default=fechas.ahora_utc)
+
+    modificado_por_usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
+    modificado_en: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    motivo_modificacion: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+    anulado: Mapped[bool] = mapped_column(Boolean, default=False)
+    anulado_por_usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
+    anulado_en: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    motivo_anulacion: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+    # Fase offline futura: dos envíos con valores distintos para la misma
+    # clave lógica fuera de la ventana normal de corrección quedan aquí
+    # marcados en vez de sobrescribirse en silencio (ver asistencia.py).
+    en_conflicto: Mapped[bool] = mapped_column(Boolean, default=False)
 
     estudiante: Mapped[Estudiante] = relationship(back_populates="asistencias")
+    sede: Mapped["Sede"] = relationship()
+    area: Mapped[Area | None] = relationship()
+    bloque_horario: Mapped["BloqueHorario | None"] = relationship()
+    docente: Mapped[Docente] = relationship(foreign_keys=[docente_id])
 
 
 # --- Horarios -------------------------------------------------------------
@@ -643,6 +738,7 @@ Index("ix_constancias_estudiante", ConstanciaGenerada.estudiante_id)
 Index("ix_pendientes_boletin_revision", PendienteBoletin.revision_id)
 Index("ix_pendientes_boletin_estudiante", PendienteBoletin.estudiante_id)
 Index("ix_notas_sapred_estudiante", NotaSapred.estudiante_id)
+Index("ix_notas_sapred_revision", NotaSapred.revision_id)
 Index("ix_textos_boletin_estudiante", TextoBoletin.estudiante_id)
 Index("ix_reemplazos_bloque", Reemplazo.bloque_horario_id)
 Index("ix_reemplazos_ausencia", Reemplazo.ausencia_id)
@@ -899,8 +995,482 @@ class ObservacionPermiso(Base):
     usuario: Mapped["Usuario | None"] = relationship()
 
 
+class AlertaPromocion(Base):
+    """Aviso a coordinación/administración: alguien generó la ficha de matrícula
+    de un estudiante pasándolo a un grado más alto aunque en las notas del
+    año lleva materias perdidas (regla del colegio: una materia perdida =
+    año perdido). Solo informa; nunca bloquea la matrícula."""
+
+    __tablename__ = "alertas_promocion"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    creado_en: Mapped[dt.datetime] = mapped_column(DateTime, default=fechas.ahora_utc)
+    estudiante_id: Mapped[int] = mapped_column(ForeignKey("estudiantes.id"))
+    usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
+    anio_lectivo: Mapped[int]
+    grado_actual: Mapped[int]
+    grado_destino: Mapped[int]
+    materias_perdidas: Mapped[int]
+    detalle: Mapped[str] = mapped_column(Text)  # JSON: [{area, promedio, notas:[[periodo, valor]]}]
+    estado: Mapped[str] = mapped_column(String(20), default="pendiente")  # pendiente | atendida
+    atendida_por_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
+    atendida_en: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    nota_atencion: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    estudiante: Mapped["Estudiante"] = relationship()
+    usuario: Mapped["Usuario | None"] = relationship(foreign_keys=[usuario_id])
+    atendida_por: Mapped["Usuario | None"] = relationship(foreign_keys=[atendida_por_id])
+
+
+class ConfiguracionSistema(Base):
+    """Parámetros generales clave → valor (ver app/configuracion.py), con
+    quién y cuándo los cambió. Hoy: si el módulo de Orientación está activo
+    (se apaga, por ejemplo, entre años lectivos mientras no hay datos)."""
+
+    __tablename__ = "configuracion_sistema"
+
+    clave: Mapped[str] = mapped_column(String(80), primary_key=True)
+    valor: Mapped[str] = mapped_column(String(500))
+    actualizado_por_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
+    actualizado_en: Mapped[dt.datetime] = mapped_column(DateTime, default=fechas.ahora_utc)
+
+    actualizado_por: Mapped["Usuario | None"] = relationship()
+
+
+class SolicitudPromocion(Base):
+    """Permiso que se le pide a coordinación para matricular a un estudiante
+    en un grado que NO es el que le corresponde por la regla normal:
+      · subir de grado llevando materias perdidas (una perdida = año perdido);
+      · saltarse grados (ej. de Preescolar a Segundo: lo normal es +1);
+      · bajarlo de grado.
+    Mientras no esté aprobada, la ficha de matrícula NO se genera con ese
+    grado (routers/certificados.py) — decisión de la institución. Reemplaza
+    al aviso informativo AlertaPromocion (que se conserva como historial).
+    Guarda quién pidió, quién decidió, cuándo y por qué: nunca se borra."""
+
+    __tablename__ = "solicitudes_promocion"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    estudiante_id: Mapped[int] = mapped_column(ForeignKey("estudiantes.id"))
+    anio_lectivo: Mapped[int]
+    grado_actual: Mapped[int]
+    grado_destino: Mapped[int]
+    # Separados por coma: perdidas | salto | retroceso
+    motivos: Mapped[str] = mapped_column(String(60))
+    materias_perdidas: Mapped[int] = mapped_column(default=0)
+    # JSON: [{area, docente, promedio, notas:[[periodo, valor]]}] — foto de las
+    # notas en el momento de pedir (pueden cambiar después con otro import).
+    detalle: Mapped[str] = mapped_column(Text, default="[]")
+    justificacion: Mapped[str] = mapped_column(Text)
+    solicitado_por_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"))
+    solicitado_en: Mapped[dt.datetime] = mapped_column(DateTime, default=fechas.ahora_utc)
+    # pendiente | aprobada | rechazada | anulada
+    estado: Mapped[str] = mapped_column(String(20), default="pendiente", server_default="pendiente")
+    decidido_por_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
+    decidido_en: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    nota_decision: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Cuándo se generó por primera vez la ficha usando esta aprobación.
+    usada_en: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+    estudiante: Mapped["Estudiante"] = relationship()
+    solicitado_por: Mapped["Usuario"] = relationship(foreign_keys=[solicitado_por_id])
+    decidido_por: Mapped["Usuario | None"] = relationship(foreign_keys=[decidido_por_id])
+
+
+Index("ix_alertas_promocion_estado", AlertaPromocion.estado)
+Index("ix_solicitudes_promocion_estado", SolicitudPromocion.estado)
+Index("ix_solicitudes_promocion_estudiante", SolicitudPromocion.estudiante_id)
 Index("ix_rol_permisos_permiso", RolPermiso.permiso_id)
 Index("ix_usuario_roles_rol", UsuarioRol.rol_id)
 Index("ix_usuario_sedes_sede", UsuarioSede.sede_id)
 Index("ix_observaciones_permiso", ObservacionPermiso.permiso)
 Index("ix_observaciones_usuario", ObservacionPermiso.usuario_id)
+
+# En SQLite dos NULL nunca "chocan" dentro de un UNIQUE (ver la nota de
+# arriba, verificada 11/09/2026): area_id NULL = toma general del director
+# de grupo, así que se usa func.coalesce(area_id, -1) para que sí choquen
+# entre sí un segundo registro general del mismo estudiante el mismo día.
+Index(
+    "ix_asistencia_estudiante_area_fecha_nn",
+    Asistencia.estudiante_id, func.coalesce(Asistencia.area_id, -1), Asistencia.fecha,
+    unique=True,
+)
+Index("ix_asistencia_grupo_fecha", Asistencia.sede_id, Asistencia.grado, Asistencia.curso, Asistencia.fecha)
+Index("ix_asistencia_docente", Asistencia.docente_id)
+Index("ix_asistencia_bloque", Asistencia.bloque_horario_id)
+
+
+class Observacion(Base):
+    """Observación sobre un estudiante: académica, de convivencia, general o
+    una remisión a psicología/orientación. confidencial se fuerza en
+    backend (nunca se confía en lo que mande el cliente) cuando
+    tipo="psicologia": el autor (típicamente un docente) sigue viendo lo que
+    él mismo escribió, pero la ampliación/gestión del caso vive aparte en
+    SeguimientoObservacion, visible solo con observaciones.ver_confidenciales
+    o seguimientos.gestionar — así un docente puede remitir un caso sin poder
+    leer después todo el seguimiento interno de orientación."""
+
+    __tablename__ = "observaciones"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    uuid_cliente: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
+    estudiante_id: Mapped[int] = mapped_column(ForeignKey("estudiantes.id"))
+    sede_id: Mapped[int] = mapped_column(ForeignKey("sedes.id"))
+    grado: Mapped[int]
+    curso: Mapped[int | None] = mapped_column(nullable=True)
+
+    tipo: Mapped[str] = mapped_column(String(20))  # academica | convivencia | general | psicologia
+    confidencial: Mapped[bool] = mapped_column(Boolean, default=False)
+    titulo: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    detalle: Mapped[str] = mapped_column(Text)
+
+    autor_usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"))
+    fecha: Mapped[dt.date] = mapped_column(Date, default=fechas.hoy_colombia)
+    creado_en: Mapped[dt.datetime] = mapped_column(DateTime, default=fechas.ahora_utc)
+
+    estado: Mapped[str] = mapped_column(String(20), default="abierta")  # abierta|atendida|cerrada
+    atendida_por_usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
+    atendida_en: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    nota_atencion: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    estudiante: Mapped["Estudiante"] = relationship()
+    sede: Mapped["Sede"] = relationship()
+    autor: Mapped["Usuario"] = relationship(foreign_keys=[autor_usuario_id])
+    atendida_por: Mapped["Usuario | None"] = relationship(foreign_keys=[atendida_por_usuario_id])
+    seguimientos: Mapped[list["SeguimientoObservacion"]] = relationship(
+        back_populates="observacion", cascade="all, delete-orphan", order_by="SeguimientoObservacion.creado_en"
+    )
+
+
+class SeguimientoObservacion(Base):
+    """Nota interna de orientación/psicología sobre una observación (típico:
+    ampliar una remisión hecha por un docente). NO la ve el autor de la
+    observación original si no tiene observaciones.ver_confidenciales —
+    es justo lo que separa "el docente remite" de "psicología gestiona"."""
+
+    __tablename__ = "seguimientos_observacion"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    observacion_id: Mapped[int] = mapped_column(ForeignKey("observaciones.id"))
+    autor_usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"))
+    nota: Mapped[str] = mapped_column(Text)
+    creado_en: Mapped[dt.datetime] = mapped_column(DateTime, default=fechas.ahora_utc)
+
+    observacion: Mapped["Observacion"] = relationship(back_populates="seguimientos")
+    autor: Mapped["Usuario"] = relationship()
+
+
+class AuditoriaCambio(Base):
+    """Rastro genérico de "quién cambió qué" para operaciones sensibles
+    (punto 27 del encargo docente: asistencia, observaciones, y lo que haga
+    falta después — no se hace una tabla nueva por cada dominio, sigue el
+    mismo espíritu de ObservacionPermiso/AlertaPromocion de no duplicar
+    infraestructura). entidad+entidad_id identifican la fila afectada."""
+
+    __tablename__ = "auditoria_cambios"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entidad: Mapped[str] = mapped_column(String(40))
+    entidad_id: Mapped[int]
+    campo: Mapped[str] = mapped_column(String(60))
+    valor_anterior: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    valor_nuevo: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
+    motivo: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    creado_en: Mapped[dt.datetime] = mapped_column(DateTime, default=fechas.ahora_utc)
+    ip: Mapped[str | None] = mapped_column(String(60), nullable=True)
+
+    usuario: Mapped["Usuario | None"] = relationship()
+
+
+Index("ix_observaciones_estudiante", Observacion.estudiante_id)
+Index("ix_observaciones_estudiante_tipo", Observacion.estudiante_id, Observacion.tipo)
+Index("ix_observaciones_confidencial_estado", Observacion.confidencial, Observacion.estado)
+Index("ix_seguimientos_observacion", SeguimientoObservacion.observacion_id)
+Index("ix_auditoria_entidad", AuditoriaCambio.entidad, AuditoriaCambio.entidad_id)
+
+
+class DatosFichaEstudiante(Base):
+    """Datos que solo aparecen en la ficha de matrícula (acudiente, comunidad,
+    etnia, discapacidad...). Se llenan al escribirlos en la ficha y quedan
+    guardados para el próximo año y para el resto del programa. Los Si/No
+    quedan como True/False, y None significa "no se ha dicho" (no es "No")."""
+
+    __tablename__ = "datos_ficha_estudiante"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    estudiante_id: Mapped[int] = mapped_column(ForeignKey("estudiantes.id"), unique=True)
+    municipio_nacimiento: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    resguardo: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    procedencia: Mapped[str | None] = mapped_column(String(200), nullable=True)  # C.E. de donde proviene
+    direccion: Mapped[str | None] = mapped_column(String(250), nullable=True)  # comunidad / predio
+    etnia: Mapped[str | None] = mapped_column(String(20), nullable=True)  # INDIGENA | AFRO | MESTIZO
+    habla_awapit: Mapped[bool | None] = mapped_column(nullable=True)
+    madre_cabeza: Mapped[bool | None] = mapped_column(nullable=True)
+    estudiante_sgp: Mapped[bool | None] = mapped_column(nullable=True)
+    fecha_ingreso: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    traslado_horas: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    traslado_minutos: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    cruza_rios: Mapped[bool | None] = mapped_column(nullable=True)
+    cruza_quebradas: Mapped[bool | None] = mapped_column(nullable=True)
+    educacion_especial: Mapped[bool | None] = mapped_column(nullable=True)
+    desplazamiento: Mapped[bool | None] = mapped_column(nullable=True)
+    discapacidad: Mapped[str | None] = mapped_column(String(300), nullable=True)  # "NINGUNA" o los tipos
+    discapacidad_detalle: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON de las casillas
+    acudiente_nombre: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    acudiente_parentesco: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    acudiente_documento: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    actualizado_en: Mapped[dt.datetime] = mapped_column(DateTime, default=fechas.ahora_utc, onupdate=fechas.ahora_utc)
+    actualizado_por_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
+
+
+class DiagnosticoGrado(Base):
+    """Diagnóstico narrativo que el director de grupo llena por grado para
+    orientación/psicología (Excel "DIAGNOSTICO IETABA", una hoja por grado),
+    importado tal cual desde ahí (ver diagnostico_import.py). Cada import
+    crea una VERSIÓN nueva — nunca se sobrescribe una anterior — así
+    orientación conserva el historial de cómo iba el grado en marzo vs. mayo
+    y decide ella misma si la versión vieja ya no aplica. `contenido_hash`
+    evita crear una versión idéntica si el mismo archivo se importa dos veces
+    sin cambios."""
+
+    __tablename__ = "diagnosticos_grado"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sede_id: Mapped[int] = mapped_column(ForeignKey("sedes.id"))
+    grado: Mapped[int]
+    curso: Mapped[int | None] = mapped_column(nullable=True)
+    hoja_excel: Mapped[str] = mapped_column(String(50))
+    contenido_hash: Mapped[str] = mapped_column(String(64), index=True)
+
+    fecha_diligenciado: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    importado_en: Mapped[dt.datetime] = mapped_column(DateTime, default=fechas.ahora_utc)
+    importado_por_usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
+    archivo_origen: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+    n_en_lista: Mapped[int | None] = mapped_column(nullable=True)
+    n_asisten: Mapped[int | None] = mapped_column(nullable=True)
+    no_asisten_texto: Mapped[str | None] = mapped_column(Text, nullable=True)
+    desplazados_texto: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embarazadas_texto: Mapped[str | None] = mapped_column(Text, nullable=True)
+    victimas_conflicto_texto: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    dificultades_academicas: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dificultades_comportamiento: Mapped[str | None] = mapped_column(Text, nullable=True)
+    acompanamiento_padres: Mapped[str | None] = mapped_column(Text, nullable=True)
+    problemas_salud: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    tematicas_trabajar: Mapped[str | None] = mapped_column(Text, nullable=True)
+    estrategias_conflicto: Mapped[str | None] = mapped_column(Text, nullable=True)
+    estrategias_aprendizaje: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resguardos_atendidos: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    recomendaciones_docentes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    llamados_atencion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    orientacion_brindada: Mapped[str | None] = mapped_column(Text, nullable=True)
+    transporte_escolar: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    observaciones_generales: Mapped[str | None] = mapped_column(Text, nullable=True)
+    director_grado_nombre: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    orientador_escolar_nombre: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    seguimiento_nota: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Volcado crudo de toda celda no vacía de la hoja, como red de seguridad:
+    # si la extracción por campos se le escapó algo (hojas mal diligenciadas
+    # varían mucho entre sí), esto nunca se pierde y queda disponible para
+    # que orientación lo revise en la pantalla o el PDF.
+    texto_crudo: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    sede: Mapped["Sede"] = relationship()
+    importado_por: Mapped["Usuario | None"] = relationship()
+    menciones: Mapped[list["DiagnosticoMencion"]] = relationship(
+        back_populates="diagnostico", cascade="all, delete-orphan"
+    )
+
+
+class DiagnosticoMencion(Base):
+    """Un estudiante nombrado dentro del texto libre de un DiagnosticoGrado
+    (no asiste, intermitencia, desplazado, embarazada, víctima de conflicto
+    armado, dificultad académica/de comportamiento, llamado de atención,
+    salud). `texto` es el fragmento que le corresponde A ÉL — no el párrafo
+    completo del campo: el importador divide el texto por dónde aparece
+    cada nombre (ver diagnostico_import._segmentos_por_nombre), así que dos
+    estudiantes mencionados en el mismo campo casi siempre quedan con
+    `texto` distinto, salvo que el propio texto no permita separarlos (ver
+    `texto_compartido`).
+
+    Se intenta enlazar automáticamente con el Estudiante real del mismo
+    grado por coincidencia de nombre (ver `diagnostico_import.
+    vincular_estudiante`); si no hay una coincidencia confiable queda con
+    estudiante_id=None y el nombre tal cual se escribió, para que
+    orientación lo vincule a mano — nunca se inventa a quién pertenece."""
+
+    __tablename__ = "diagnosticos_mencion"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    diagnostico_id: Mapped[int] = mapped_column(ForeignKey("diagnosticos_grado.id"))
+    # no_asiste | intermitencia | desplazado | embarazada | victima_conflicto |
+    # dificultad_academica | dificultad_comportamiento | llamado_atencion | salud
+    categoria: Mapped[str] = mapped_column(String(30))
+    texto: Mapped[str] = mapped_column(Text)
+    nombre_detectado: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    # alta = único candidato claro en el grupo | media = 2+ candidatos
+    # empatados (posible coincidencia, hace falta que una persona elija) |
+    # baja = ningún estudiante del grupo coincide (puede ser un familiar,
+    # docente, lugar u otra persona, o un estudiante que no está en la lista).
+    confianza: Mapped[str] = mapped_column(String(10), default="alta", server_default="alta")
+    # True = este `texto` es compartido con otras menciones del MISMO
+    # fragmento del Excel porque el texto no permitía separar qué parte le
+    # corresponde a cada quien (ej. "Jhon y Pedro tienen dificultades...") —
+    # mejor eso que inventar dónde termina la parte de cada uno.
+    texto_compartido: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # JSON con los ids de Estudiante empatados cuando confianza="media", para
+    # ofrecer "¿es alguno de estos?" en vez de una búsqueda desde cero.
+    candidatos_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    estudiante_id: Mapped[int | None] = mapped_column(ForeignKey("estudiantes.id"), nullable=True)
+    vinculo_automatico: Mapped[bool] = mapped_column(Boolean, default=False)
+    vinculado_por_usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
+    vinculado_en: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+    diagnostico: Mapped["DiagnosticoGrado"] = relationship(back_populates="menciones")
+    estudiante: Mapped["Estudiante | None"] = relationship()
+    vinculado_por: Mapped["Usuario | None"] = relationship(foreign_keys=[vinculado_por_usuario_id])
+
+
+class Caso(Base):
+    """Caso de orientación: el trabajo ACTIVO sobre UN estudiante concreto,
+    aparte de lo que trae el Excel importado (DiagnosticoGrado/
+    DiagnosticoMencion, que nunca se editan — son la fotografía histórica).
+    Un caso nace de dos maneras:
+      · "Abrir caso" desde una mención detectada en el Excel
+        (`mencion_origen_id` queda apuntando a ella — origen="importado").
+      · Creado a mano por orientación sin que venga del Excel
+        (origen="manual").
+    Se liga al GRUPO (sede+grado+curso, igual que Observacion) tal como
+    estaba al abrirse el caso, no a una versión puntual del diagnóstico: es
+    un registro que debe sobrevivir a que se reimporte un Excel de un
+    período nuevo, no algo que ese import reemplace o borre.
+
+    Nota histórica: la tabla se llama `diagnosticos_observaciones` porque
+    así nació (una nota plana, sin estado); se conserva el nombre físico
+    para no reconstruir la tabla, pero el concepto ahora es Caso.
+
+    No tiene su propio flag de confidencialidad: todo el módulo de
+    diagnóstico ya está protegido detrás de diagnosticos.ver/observar con
+    rbac.requiere() (bloqueo duro, igual que observaciones.ver_confidenciales),
+    así que un segundo nivel de confidencialidad aquí sería una segunda
+    fuente de verdad sin necesidad real."""
+
+    __tablename__ = "diagnosticos_observaciones"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sede_id: Mapped[int] = mapped_column(ForeignKey("sedes.id"))
+    grado: Mapped[int]
+    curso: Mapped[int | None] = mapped_column(nullable=True)
+    estudiante_id: Mapped[int] = mapped_column(ForeignKey("estudiantes.id"))
+
+    # academica | comportamiento | inasistencia | intermitencia | familiar |
+    # salud | convivencia | orientacion | riesgo | otra
+    tipo: Mapped[str] = mapped_column("categoria", String(30))
+    titulo: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    descripcion: Mapped[str] = mapped_column("detalle", Text)
+    acciones: Mapped[str | None] = mapped_column(Text, nullable=True)
+    observaciones: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fecha_apertura: Mapped[dt.date] = mapped_column("fecha", Date, default=fechas.hoy_colombia)
+
+    # abierto | en_seguimiento | cerrado
+    estado: Mapped[str] = mapped_column(String(20), default="abierto", server_default="abierto")
+    proximo_seguimiento: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    cerrado_en: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    cerrado_por_usuario_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
+
+    # importado | manual — de dónde salió el caso.
+    origen: Mapped[str] = mapped_column(String(10), default="manual", server_default="manual")
+    mencion_origen_id: Mapped[int | None] = mapped_column(ForeignKey("diagnosticos_mencion.id"), nullable=True)
+
+    autor_usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"))
+    creado_en: Mapped[dt.datetime] = mapped_column(DateTime, default=fechas.ahora_utc)
+
+    sede: Mapped["Sede"] = relationship()
+    estudiante: Mapped["Estudiante"] = relationship()
+    autor: Mapped["Usuario"] = relationship(foreign_keys=[autor_usuario_id])
+    cerrado_por: Mapped["Usuario | None"] = relationship(foreign_keys=[cerrado_por_usuario_id])
+    mencion_origen: Mapped["DiagnosticoMencion | None"] = relationship()
+    seguimientos: Mapped[list["CasoSeguimiento"]] = relationship(
+        back_populates="caso", cascade="all, delete-orphan", order_by="CasoSeguimiento.fecha.desc()"
+    )
+
+
+class CasoSeguimiento(Base):
+    """Una entrada del historial de un Caso: cada vez que orientación
+    vuelve a atender la situación, sin abrir un caso nuevo. Varias de estas
+    por caso (ver Caso.seguimientos)."""
+
+    __tablename__ = "casos_seguimiento"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    caso_id: Mapped[int] = mapped_column(ForeignKey("diagnosticos_observaciones.id"))
+    fecha: Mapped[dt.date] = mapped_column(Date, default=fechas.hoy_colombia)
+    tipo_atencion: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    situacion: Mapped[str] = mapped_column(Text)
+    accion_realizada: Mapped[str | None] = mapped_column(Text, nullable=True)
+    compromisos: Mapped[str | None] = mapped_column(Text, nullable=True)
+    observaciones: Mapped[str | None] = mapped_column(Text, nullable=True)
+    proxima_fecha: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+
+    autor_usuario_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"))
+    creado_en: Mapped[dt.datetime] = mapped_column(DateTime, default=fechas.ahora_utc)
+
+    caso: Mapped["Caso"] = relationship(back_populates="seguimientos")
+    autor: Mapped["Usuario"] = relationship()
+
+
+Index("ix_diagnosticos_grado_sede_grado_curso", DiagnosticoGrado.sede_id, DiagnosticoGrado.grado, DiagnosticoGrado.curso)
+Index("ix_diagnosticos_mencion_diagnostico", DiagnosticoMencion.diagnostico_id)
+Index("ix_diagnosticos_mencion_estudiante", DiagnosticoMencion.estudiante_id)
+Index("ix_casos_grupo", Caso.sede_id, Caso.grado, Caso.curso)
+Index("ix_casos_estudiante", Caso.estudiante_id)
+Index("ix_casos_estado", Caso.estado)
+Index("ix_casos_seguimiento_caso", CasoSeguimiento.caso_id)
+
+
+class ResultadoIcfes(Base):
+    """Resultado individual Saber 11 publicado por el ICFES (PRISMA → Publicación
+    de Resultados → Consulta Plantel). Lo llena backend/importar_icfes.py; una
+    fila por número de registro (AC...), que el ICFES no repite entre años.
+
+    El ICFES no publica el documento del estudiante, solo el nombre: el vínculo
+    con `estudiantes` es por nombre completo normalizado y únicamente cuando
+    hay UNA coincidencia (ver icfes.vincular_estudiantes); si no, queda en None."""
+
+    __tablename__ = "resultados_icfes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    registro: Mapped[str] = mapped_column(String(30), unique=True, index=True)
+    anio: Mapped[int] = mapped_column(index=True)
+    periodo: Mapped[int]  # período de aplicación del ICFES (no es el período académico)
+    nombre: Mapped[str] = mapped_column(String(200))
+    estudiante_id: Mapped[int | None] = mapped_column(ForeignKey("estudiantes.id"), nullable=True, index=True)
+
+    # Puntajes por prueba (0-100) y percentil nacional (1-100); None = "-" en el ICFES
+    lc: Mapped[int | None] = mapped_column(nullable=True)
+    mat: Mapped[int | None] = mapped_column(nullable=True)
+    syc: Mapped[int | None] = mapped_column(nullable=True)
+    cn: Mapped[int | None] = mapped_column(nullable=True)
+    ing: Mapped[int | None] = mapped_column(nullable=True)
+    pct_lc: Mapped[int | None] = mapped_column(nullable=True)
+    pct_mat: Mapped[int | None] = mapped_column(nullable=True)
+    pct_syc: Mapped[int | None] = mapped_column(nullable=True)
+    pct_cn: Mapped[int | None] = mapped_column(nullable=True)
+    pct_ing: Mapped[int | None] = mapped_column(nullable=True)
+    puntaje_global: Mapped[int | None] = mapped_column(nullable=True)  # 0-500
+    percentil_global: Mapped[int | None] = mapped_column(nullable=True)
+    # Percentiles de "población especial" (casi siempre vacíos): JSON tal cual
+    percentiles_especiales: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    importado_en: Mapped[dt.datetime] = mapped_column(DateTime, default=fechas.ahora_utc)
+
+    estudiante: Mapped["Estudiante | None"] = relationship()

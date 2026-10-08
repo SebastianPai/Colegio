@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from .. import auth_servicio, crud, rbac, schemas
+from .. import auth, auth_servicio, crud, datos_ficha, fechas, models, rbac, reporte_notas, schemas
 from ..database import get_db
 
 router = APIRouter(prefix="/api/estudiantes", tags=["estudiantes"])
@@ -92,6 +92,56 @@ def crear_estudiante(
             status_code=409, detail="Ya existe un estudiante registrado con ese documento"
         )
     return crud.crear_estudiante(db, estudiante)
+
+
+@router.get("/{estudiante_id}/datos-ficha", response_model=schemas.DatosFichaCampos)
+def obtener_datos_ficha(
+    estudiante_id: int, _obs=Depends(rbac.observar("estudiantes.ver")), db: Session = Depends(get_db)
+):
+    """Lo ya guardado del estudiante, en forma de casillas de la ficha de matrícula."""
+    est = crud.obtener_estudiante(db, estudiante_id)
+    if est is None:
+        raise HTTPException(status_code=404, detail="Estudiante no encontrado")
+    fila = db.query(models.DatosFichaEstudiante).filter_by(estudiante_id=estudiante_id).one_or_none()
+    return {"campos": datos_ficha.datos_a_campos(fila, est)}
+
+
+@router.put("/{estudiante_id}/datos-ficha", response_model=schemas.DatosFichaCampos)
+def guardar_datos_ficha(
+    estudiante_id: int,
+    datos: schemas.DatosFichaCampos,
+    _obs=Depends(rbac.observar("estudiantes.editar")),
+    db: Session = Depends(get_db),
+):
+    """Guarda en el estudiante lo escrito en la ficha (acudiente, comunidad,
+    etnia, discapacidad, lugar de expedición...). Nombres, documento, fecha de
+    nacimiento y grado NO se tocan desde aquí: esos se editan en su lugar."""
+    est = crud.obtener_estudiante(db, estudiante_id)
+    if est is None:
+        raise HTTPException(status_code=404, detail="Estudiante no encontrado")
+    fila = db.query(models.DatosFichaEstudiante).filter_by(estudiante_id=estudiante_id).one_or_none()
+    if fila is None:
+        fila = models.DatosFichaEstudiante(estudiante_id=estudiante_id)
+        db.add(fila)
+    datos_ficha.campos_a_datos(datos.campos, fila)
+    fila.actualizado_por_id = _obs.usuario.id if _obs is not None else None
+    lugar = (datos.campos.get("municipio_expedicion") or "").strip()
+    if lugar:
+        est.lugar_expedicion_documento = lugar
+    db.commit()
+    return {"campos": datos_ficha.datos_a_campos(fila, est)}
+
+
+@router.get("/{estudiante_id}/riesgo-promocion", response_model=schemas.RiesgoPromocion)
+def riesgo_promocion_estudiante(
+    estudiante_id: int,
+    anio_lectivo: int | None = None,
+    _obs=Depends(rbac.observar("estudiantes.ver")),
+    db: Session = Depends(get_db),
+):
+    if crud.obtener_estudiante(db, estudiante_id) is None:
+        raise HTTPException(status_code=404, detail="Estudiante no encontrado")
+    return reporte_notas.riesgo_promocion(db, estudiante_id, anio_lectivo or fechas.anio_lectivo_actual())
 
 
 @router.get("/{estudiante_id}", response_model=schemas.Estudiante)

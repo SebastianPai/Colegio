@@ -7,7 +7,8 @@ let seccionReportes = "resumen"; // resumen | lista | conciliacion
 const SECCIONES_REPORTES = [
   { id: "resumen", label: "Resumen" },
   { id: "lista", label: "Lista de estudiantes" },
-  { id: "conciliacion", label: "Conciliación SIMAC ↔ SAPRED" },
+  { id: "docentes", label: "Lista de docentes" },
+  { id: "conciliacion", label: "Conciliación SIMAC <i data-lucide=arrow-left-right class=ico></i> SAPRED" },
 ];
 
 async function renderReportes() {
@@ -34,6 +35,7 @@ async function renderReportes() {
 
   if (seccionReportes === "conciliacion") return renderSeccionConciliacion();
   if (seccionReportes === "lista") return renderSeccionListaCupo();
+  if (seccionReportes === "docentes") return renderSeccionListaDocentes();
   return renderSeccionResumenInstitucional();
 }
 
@@ -87,8 +89,8 @@ function clavesDesdeTexto(texto, clavesExistentes) {
 
 const VISTAS_LISTA_CUPO = [
   { id: "activos", label: "Activos" },
-  { id: "posibles", label: "🚪 Posibles retiros" },
-  { id: "retirados", label: "✖ Retirados" },
+  { id: "posibles", label: "<i data-lucide=door-open class=ico></i> Posibles retiros" },
+  { id: "retirados", label: "<i data-lucide=x class=ico></i> Retirados" },
 ];
 
 function nombreGradoLista(n) {
@@ -115,6 +117,7 @@ const COLUMNAS_LISTA_CUPO = [
   { id: "sede", label: "Sede", valor: (e) => (e.sede ? e.sede.nombre : "") },
   { id: "estado", label: "Estado", valor: (e) => e.estado || "" },
   { id: "marca", label: "Marca", valor: (e) => (e.retirado ? "Retirado" : e.posible_retirado ? "Posible retiro" : "") },
+  { id: "resguardo", label: "Resguardo", valor: (e) => (e.resguardo === false ? "No" : "Sí") },
   { id: "observaciones", label: "Observaciones", valor: (e) => e.observaciones || "" },
   { id: "firma", label: "Firma (en blanco)", valor: () => "" },
 ];
@@ -265,13 +268,13 @@ function pintarListaCupo(contenedor, sedes, estudiantes, conteos) {
   const accionesFila = (e) => {
     const b = [];
     if (listaCupoVista === "activos") {
-      b.push(`<button type="button" class="boton secundario" data-lista-accion="posible" data-lista-id="${e.id}" title="Sigue en el sistema pero no cuenta en pendientes de boletín">🚪 Posible retiro</button>`);
+      b.push(`<button type="button" class="boton secundario" data-lista-accion="posible" data-lista-id="${e.id}" title="Sigue en el sistema pero no cuenta en pendientes de boletín">Posible retiro</button>`);
     }
     if (listaCupoVista !== "retirados") {
-      b.push(`<button type="button" class="boton secundario" data-lista-accion="retirado" data-lista-id="${e.id}" title="Queda marcado como retirado (no se borra ni se retira del sistema)">✖ Retirado</button>`);
+      b.push(`<button type="button" class="boton secundario" data-lista-accion="retirado" data-lista-id="${e.id}" title="Queda marcado como retirado (no se borra ni se retira del sistema)">Retirado</button>`);
     }
     if (listaCupoVista !== "activos") {
-      b.push(`<button type="button" class="boton secundario" data-lista-accion="quitar" data-lista-id="${e.id}" title="Vuelve a ser un estudiante activo normal">↩ Quitar</button>`);
+      b.push(`<button type="button" class="boton secundario" data-lista-accion="quitar" data-lista-id="${e.id}" title="Vuelve a ser un estudiante activo normal">Quitar</button>`);
     }
     return b.join(" ");
   };
@@ -312,16 +315,16 @@ function pintarListaCupo(contenedor, sedes, estudiantes, conteos) {
              </label>`
           : ""
       }
-      <button type="button" class="boton" id="btn-lista-pdf" ${lista.length ? "" : "disabled"}>📄 Descargar PDF</button>
-      <button type="button" class="boton secundario" onclick="window.print()">🖨 Imprimir</button>
+      <button type="button" class="boton" id="btn-lista-pdf" ${lista.length ? "" : "disabled"}><i data-lucide=file-text class=ico></i> Descargar PDF</button>
+      <button type="button" class="boton secundario" onclick="window.print()"><i data-lucide=printer class=ico></i> Imprimir</button>
     </div>
 
     ${
       esActivos
         ? `<div class="barra-filtros no-imprimir">
              <strong>Incluir también:</strong>
-             <label class="check-linea filtro-check"><input type="checkbox" data-lista-incluir="posibles" ${listaCupoIncluir.posibles ? "checked" : ""} /> 🚪 Posibles retiros</label>
-             <label class="check-linea filtro-check"><input type="checkbox" data-lista-incluir="retirados" ${listaCupoIncluir.retirados ? "checked" : ""} /> ✖ Retirados</label>
+             <label class="check-linea filtro-check"><input type="checkbox" data-lista-incluir="posibles" ${listaCupoIncluir.posibles ? "checked" : ""} /> <i data-lucide=door-open class=ico></i> Posibles retiros</label>
+             <label class="check-linea filtro-check"><input type="checkbox" data-lista-incluir="retirados" ${listaCupoIncluir.retirados ? "checked" : ""} /> <i data-lucide=x class=ico></i> Retirados</label>
              <label class="check-linea filtro-check"><input type="checkbox" data-lista-incluir="sinGrupo" ${listaCupoIncluir.sinGrupo ? "checked" : ""} /> Sin grupo asignado</label>
            </div>
 
@@ -342,7 +345,7 @@ function pintarListaCupo(contenedor, sedes, estudiantes, conteos) {
                  const delGrado = gruposDisponibles.filter((g) => g.grado === grado);
                  const todos = delGrado.every((g) => listaCupoGrupos.has(g.clave));
                  return `<div class="fila-grupos-lista">
-                   <button type="button" class="boton-texto-chico" data-grado-todos="${grado}">${todos ? "✓ " : ""}${nombreGradoLista(grado)} (todo el grado)</button>
+                   <button type="button" class="boton-texto-chico" data-grado-todos="${grado}">${todos ? "<i data-lucide=check class=ico></i> " : ""}${nombreGradoLista(grado)} (todo el grado)</button>
                    ${delGrado
                      .map(
                        (g) => `<label class="check-linea filtro-check"><input type="checkbox" data-grupo-lista="${g.clave}" ${
@@ -397,10 +400,10 @@ function pintarListaCupo(contenedor, sedes, estudiantes, conteos) {
 
       <div id="barra-seleccion-lista" class="barra-seleccion-grilla no-imprimir" ${listaCupoSeleccion.size ? "" : "hidden"}>
         <strong id="barra-seleccion-lista-conteo">${listaCupoSeleccion.size} seleccionado(s)</strong>
-        ${listaCupoVista === "activos" ? '<button type="button" class="boton secundario" data-lista-lote="posible">🚪 Marcar posible retiro</button>' : ""}
-        ${listaCupoVista !== "retirados" ? '<button type="button" class="boton secundario" data-lista-lote="retirado">✖ Marcar retirado</button>' : ""}
-        ${listaCupoVista !== "activos" ? '<button type="button" class="boton secundario" data-lista-lote="quitar">↩ Quitar marca</button>' : ""}
-        <button type="button" class="boton-texto-chico" id="btn-lista-limpiar">✕ Quitar selección</button>
+        ${listaCupoVista === "activos" ? '<button type="button" class="boton secundario" data-lista-lote="posible"><i data-lucide=door-open class=ico></i> Marcar posible retiro</button>' : ""}
+        ${listaCupoVista !== "retirados" ? '<button type="button" class="boton secundario" data-lista-lote="retirado"><i data-lucide=x class=ico></i> Marcar retirado</button>' : ""}
+        ${listaCupoVista !== "activos" ? '<button type="button" class="boton secundario" data-lista-lote="quitar"><i data-lucide=undo-2 class=ico></i> Quitar marca</button>' : ""}
+        <button type="button" class="boton-texto-chico" id="btn-lista-limpiar"><i data-lucide=x class=ico></i> Quitar selección</button>
       </div>
 
       ${
@@ -421,9 +424,9 @@ function pintarListaCupo(contenedor, sedes, estudiantes, conteos) {
                        (c, ci) =>
                          `<td>${esc(c.valor(e))}${
                            ci === 0 && e.retirado
-                             ? ' <span class="chip-retiro chip-retirado">✖ RETIRADO</span>'
+                             ? ' <span class="chip-retiro chip-retirado"><i data-lucide=x class=ico></i> RETIRADO</span>'
                              : ci === 0 && e.posible_retirado
-                             ? ' <span class="chip-retiro">🚪 posible retiro</span>'
+                             ? ' <span class="chip-retiro"><i data-lucide=door-open class=ico></i> posible retiro</span>'
                              : ""
                          }</td>`
                      )
@@ -435,7 +438,7 @@ function pintarListaCupo(contenedor, sedes, estudiantes, conteos) {
                </tbody>
              </table></div>`
           : !esActivos
-          ? `<div class="estado-vacio"><div class="estado-vacio-icono">✓</div><h3>No hay estudiantes en esta lista</h3></div>`
+          ? `<div class="estado-vacio"><div class="estado-vacio-icono"><i data-lucide=check class=ico></i> </div><h3>No hay estudiantes en esta lista</h3></div>`
           : ""
       }
     </div>
@@ -538,7 +541,7 @@ function pintarListaCupo(contenedor, sedes, estudiantes, conteos) {
       alert(err.message);
     } finally {
       btn.disabled = false;
-      btn.textContent = "📄 Descargar PDF";
+      btn.textContent = "Descargar PDF";
     }
   });
 }
@@ -660,6 +663,218 @@ function vincularListaCupo(contenedor, sedes, lista) {
   );
 }
 
+// --- Sección: Lista de docentes (dinámico: columnas y responsables de grupo) --
+// El backend (GET /api/reportes/docentes, ver crud.listar_docentes_reporte) ya
+// calcula por docente sus asignaciones y si es "responsable de grupo" —
+// director de grupo (grupo con profesores de área) o maestro único (rural,
+// dicta todo el grupo). Aquí solo se filtra "todos / solo responsables" y se
+// escogen las columnas a mostrar/exportar, mismo patrón que Lista de estudiantes.
+
+let listaDocentesSede = ""; // "" = todas las sedes IETABA
+let listaDocentesVista = "todos"; // todos | responsables
+let listaDocentesSedeInicializada = false;
+
+function rolDocenteTexto(d) {
+  const tipos = new Set(d.asignaciones.map((a) => a.tipo));
+  if (tipos.has("DIRECTOR")) return "Director de grupo";
+  if (tipos.has("GRUPO")) return "Maestro único";
+  if (tipos.has("AREA")) return "Docente de área";
+  return "Sin asignación";
+}
+
+// Mismas claves que COLUMNAS en backend/app/docentes_pdf.py.
+const COLUMNAS_LISTA_DOCENTES = [
+  { id: "nombre", label: "Nombre completo", valor: (d) => d.nombre_completo },
+  { id: "documento", label: "Documento", valor: (d) => d.documento },
+  { id: "telefono", label: "Teléfono", valor: (d) => d.telefono || "" },
+  { id: "email", label: "Correo", valor: (d) => d.email || "" },
+  { id: "direccion", label: "Dirección", valor: (d) => d.direccion || "" },
+  { id: "fecha_nacimiento", label: "Fecha de nacimiento", valor: (d) => (d.fecha_nacimiento ? d.fecha_nacimiento.split("-").reverse().join("/") : "") },
+  { id: "sede", label: "Sede(s)", valor: (d) => [...new Set(d.asignaciones.map((a) => a.sede_nombre).filter(Boolean))].sort().join(", ") },
+  { id: "rol", label: "Rol", valor: rolDocenteTexto },
+  { id: "director_de", label: "Director/responsable de", valor: (d) => d.grupos_dirige.join(", ") || "—" },
+  {
+    id: "areas",
+    label: "Área(s) que dicta",
+    valor: (d) => [...new Set(d.asignaciones.map((a) => a.area_nombre).filter(Boolean))].sort().join(", ") || "—",
+  },
+  { id: "firma", label: "Firma (en blanco)", valor: () => "" },
+];
+
+// Columnas elegidas: se recuerdan en este navegador.
+let listaDocentesColumnas = (() => {
+  try {
+    const guardadas = JSON.parse(localStorage.getItem("listaDocentesColumnas"));
+    if (Array.isArray(guardadas) && guardadas.length) return guardadas;
+  } catch (_) {}
+  return ["nombre", "documento", "rol", "director_de"];
+})();
+
+// Columnas cortas tipo etiqueta (sede, rol): no se parten a media frase.
+const CELDA_NOWRAP_DOCENTES = new Set(["sede", "rol", "documento", "telefono", "fecha_nacimiento"]);
+
+function guardarColumnasListaDocentes() {
+  try {
+    localStorage.setItem("listaDocentesColumnas", JSON.stringify(listaDocentesColumnas));
+  } catch (_) {}
+}
+
+async function renderSeccionListaDocentes() {
+  const contenedor = document.getElementById("contenido-reportes");
+  const sedes = (await api("/api/sedes")).filter((s) => s.pertenece_ietaba);
+  if (!listaDocentesSedeInicializada) {
+    listaDocentesSedeInicializada = true;
+    const ietaba = sedes.find((s) => s.nombre.toUpperCase().includes("I.E.T.A.B.A"));
+    listaDocentesSede = ietaba ? String(ietaba.id) : "";
+  }
+  await cargarYPintarListaDocentes(contenedor, sedes);
+}
+
+async function cargarYPintarListaDocentes(contenedor, sedes) {
+  contenedor.innerHTML = '<div class="estado-carga">Cargando docentes...</div>';
+  const params = new URLSearchParams();
+  if (listaDocentesSede) params.set("sede_id", listaDocentesSede);
+  let docentes;
+  try {
+    docentes = await api(`/api/reportes/docentes?${params}`);
+  } catch (err) {
+    contenedor.innerHTML = `<div class="alerta-caja">${err.message}</div>`;
+    return;
+  }
+  pintarListaDocentes(contenedor, sedes, docentes);
+}
+
+function pintarListaDocentes(contenedor, sedes, docentes) {
+  const totalResponsables = docentes.filter((d) => d.es_responsable_grupo).length;
+  const lista = listaDocentesVista === "responsables" ? docentes.filter((d) => d.es_responsable_grupo) : docentes;
+
+  const soloUnaSede = listaDocentesSede !== "";
+  const sedeNombre = soloUnaSede
+    ? (sedes.find((s) => String(s.id) === listaDocentesSede) || {}).nombre
+    : "Todas las sedes IETABA";
+  // Con una sola sede en pantalla, la columna "Sede(s)" repetiría el mismo
+  // valor en cada fila — ese dato ya va una sola vez en el título.
+  const columnas = COLUMNAS_LISTA_DOCENTES.filter(
+    (c) => listaDocentesColumnas.includes(c.id) && !(soloUnaSede && c.id === "sede")
+  );
+  const base = listaDocentesVista === "responsables" ? "Docentes responsables de grupo" : "Docentes";
+  const titulo = soloUnaSede ? `${base} — ${sedeNombre} (${lista.length})` : `${base} — ${lista.length}`;
+
+  contenedor.innerHTML = `
+    <nav class="subnav-modulo no-imprimir">
+      <button type="button" class="subnav-item ${listaDocentesVista === "todos" ? "activo" : ""}" data-vista-docentes="todos">Todos (${docentes.length})</button>
+      <button type="button" class="subnav-item ${listaDocentesVista === "responsables" ? "activo" : ""}" data-vista-docentes="responsables">Solo directores/responsables de grupo (${totalResponsables})</button>
+    </nav>
+
+    <div class="barra-filtros no-imprimir">
+      <label class="filtro-campo">Sede
+        <select id="select-docentes-sede">
+          <option value="" ${listaDocentesSede === "" ? "selected" : ""}>Todas las sedes IETABA</option>
+          ${sedes.map((s) => `<option value="${s.id}" ${String(s.id) === listaDocentesSede ? "selected" : ""}>${s.nombre}</option>`).join("")}
+        </select>
+      </label>
+      <button type="button" class="boton" id="btn-docentes-pdf" ${lista.length ? "" : "disabled"}><i data-lucide=file-text class=ico></i> Descargar PDF</button>
+      <button type="button" class="boton secundario" onclick="window.print()"><i data-lucide=printer class=ico></i> Imprimir</button>
+    </div>
+
+    <div class="barra-filtros no-imprimir">
+      <strong>Columnas:</strong>
+      ${COLUMNAS_LISTA_DOCENTES.map((c) => {
+        const deshabilitada = soloUnaSede && c.id === "sede";
+        return `<label class="check-linea filtro-check" ${deshabilitada ? 'title="Ya está en el título, arriba: solo aplica con \'Todas las sedes IETABA\'"' : ""}><input type="checkbox" data-docentes-columna="${c.id}" ${listaDocentesColumnas.includes(c.id) ? "checked" : ""} ${deshabilitada ? "disabled" : ""} /> ${c.label}</label>`;
+      }).join("")}
+    </div>
+
+    <div class="hoja-imprimir">
+      <h2 style="margin:6px 0">${titulo}</h2>
+      ${soloUnaSede ? "" : `<p class="pendiente">${sedeNombre}</p>`}
+      ${
+        lista.length
+          ? `<div class="tabla-scroll"><table>
+               <thead><tr><th>#</th>${columnas.map((c) => `<th${CELDA_NOWRAP_DOCENTES.has(c.id) ? ' class="celda-nowrap"' : ""}>${esc(c.label)}</th>`).join("")}</tr></thead>
+               <tbody>
+                 ${lista
+                   .map(
+                     (d, i) => `<tr>
+                   <td>${i + 1}</td>
+                   ${columnas.map((c) => `<td${CELDA_NOWRAP_DOCENTES.has(c.id) ? ' class="celda-nowrap"' : ""}>${esc(c.valor(d))}</td>`).join("")}
+                 </tr>`
+                   )
+                   .join("")}
+               </tbody>
+             </table></div>`
+          : `<div class="estado-vacio"><div class="estado-vacio-icono"><i data-lucide=check class=ico></i> </div><h3>No hay docentes para estos filtros</h3></div>`
+      }
+    </div>
+  `;
+
+  document.getElementById("select-docentes-sede").addEventListener("change", (e) => {
+    listaDocentesSede = e.target.value;
+    cargarYPintarListaDocentes(contenedor, sedes);
+  });
+  contenedor.querySelectorAll("[data-vista-docentes]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      listaDocentesVista = btn.dataset.vistaDocentes;
+      pintarListaDocentes(contenedor, sedes, docentes);
+    })
+  );
+  contenedor.querySelectorAll("[data-docentes-columna]").forEach((chk) =>
+    chk.addEventListener("change", () => {
+      const id = chk.dataset.docentesColumna;
+      listaDocentesColumnas = chk.checked
+        ? COLUMNAS_LISTA_DOCENTES.map((c) => c.id).filter((c) => c === id || listaDocentesColumnas.includes(c))
+        : listaDocentesColumnas.filter((c) => c !== id);
+      guardarColumnasListaDocentes();
+      pintarListaDocentes(contenedor, sedes, docentes);
+    })
+  );
+
+  document.getElementById("btn-docentes-pdf").addEventListener("click", async (ev) => {
+    if (!columnas.length) return alert("Escoge al menos una columna para el PDF.");
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    btn.textContent = "Generando PDF...";
+    try {
+      await descargarPdfListaDocentes({
+        ids: lista.map((d) => d.id),
+        columnas: columnas.map((c) => c.id),
+        sede_nombre: sedeNombre,
+        solo_responsables_grupo: listaDocentesVista === "responsables",
+      });
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Descargar PDF";
+    }
+  });
+}
+
+// POST → blob → descarga. Mismo manejo de sesión que descargarPdfListaCupo().
+async function descargarPdfListaDocentes(cuerpo) {
+  const pedir = () =>
+    fetch("/api/reportes/lista-docentes/pdf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cuerpo),
+    });
+  await asegurarSesionFresca();
+  let res = await pedir();
+  if (res.status === 401 && (await _intentarRefresh())) res = await pedir();
+  if (!res.ok) {
+    const detalle = await res.json().catch(() => ({}));
+    throw new Error(detalle.detail || `Error ${res.status} generando el PDF`);
+  }
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `lista_docentes_${fechaColombiaISO()}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
 // --- Sección: Resumen institucional (clasificación de sedes) ---------------
 
 async function renderSeccionResumenInstitucional() {
@@ -743,7 +958,7 @@ let conciliacionPeriodo = 2;
 let conciliacionSedeSeleccionada = "";
 let conciliacionGradoSeleccionado = "";
 let conciliacionVista = "estudiantes"; // estudiantes | grupos | docentes
-let conciliacionEstadoFiltro = ""; // "" = todos
+let conciliacionEstadoFiltro = "problemas"; // "problemas" = todo menos "coincide" (el default: lo que va bien no necesita salir en el reporte)
 let conciliacionDocenteFiltro = "";
 let conciliacionBusqueda = "";
 let mantenerFocoBuscarConciliacion = false;
@@ -751,12 +966,14 @@ let temporizadorBuscarConciliacion;
 let conciliacionCache = null; // último ConciliacionResultado recibido del backend
 let conciliacionUltimaActualizacion = null; // Date del último fetch exitoso
 let conciliacionRenderToken = 0;
+let hallazgosIncluirResueltos = false; // false = solo pendientes; true = historial completo (incluye ya corregidos)
+let presenciaIncluirCoincide = false; // false = solo Solo SIMAT / Solo SAPRED; true = también los que coinciden
 
 const ETIQUETAS_ESTADO_CONCILIACION = {
-  coincide: { icono: "🟢", texto: "Coincide", clase: "ok" },
-  solo_simac: { icono: "🔴", texto: "Solo SIMAC", clase: "alerta" },
-  solo_sapred: { icono: "🟠", texto: "Solo SAPRED", clase: "naranja" },
-  diferencia: { icono: "🟡", texto: "Diferencia", clase: "proceso" },
+  coincide: { icono: "<span class=punto-verde></span>", texto: "Coincide", clase: "ok" },
+  solo_simac: { icono: "<span class=punto-rojo></span>", texto: "Solo SIMAC", clase: "alerta" },
+  solo_sapred: { icono: "<span class=punto-naranja></span>", texto: "Solo SAPRED", clase: "naranja" },
+  diferencia: { icono: "<span class=punto-amarillo></span>", texto: "Diferencia", clase: "proceso" },
 };
 
 const ETIQUETAS_CAMPO_DIFERENCIA = {
@@ -800,7 +1017,7 @@ async function renderSeccionConciliacion() {
 
 async function cargarYPintarConciliacion(contenedor, sedes) {
   const miToken = ++conciliacionRenderToken;
-  contenedor.innerHTML = '<div class="estado-carga">Calculando conciliación SIMAC ↔ SAPRED...</div>';
+  contenedor.innerHTML = '<div class="estado-carga">Calculando conciliación SIMAC <i data-lucide=arrow-left-right class=ico></i> SAPRED...</div>';
   let resultado;
   try {
     resultado = await api(`/api/reportes/conciliacion?${urlConciliacionParams()}`);
@@ -817,7 +1034,11 @@ async function cargarYPintarConciliacion(contenedor, sedes) {
 
 function filtrarEstudiantesConciliacion(estudiantes) {
   let filtrados = estudiantes;
-  if (conciliacionEstadoFiltro) {
+  if (conciliacionEstadoFiltro === "problemas") {
+    filtrados = filtrados.filter((e) => e.estado_conciliacion !== "coincide");
+  } else if (conciliacionEstadoFiltro === "promocion_anticipada") {
+    filtrados = filtrados.filter((e) => e.candidato_promocion_anticipada);
+  } else if (conciliacionEstadoFiltro) {
     filtrados = filtrados.filter((e) => e.estado_conciliacion === conciliacionEstadoFiltro);
   }
   if (conciliacionDocenteFiltro) {
@@ -839,8 +1060,12 @@ function pintarConciliacion(contenedor, sedes) {
       <span class="conteo-resultados">Última actualización: ${
         conciliacionUltimaActualizacion ? formatoFechaHoraConciliacion(conciliacionUltimaActualizacion) : "-"
       }</span>
-      <button type="button" class="boton secundario" id="btn-actualizar-conciliacion">🔄 Actualizar conciliación</button>
-      <button type="button" class="boton secundario" id="btn-exportar-conciliacion">⬇ Exportar inconsistencias (Excel)</button>
+      <button type="button" class="boton secundario" id="btn-actualizar-conciliacion"><i data-lucide=refresh-cw class=ico></i> Actualizar conciliación</button>
+      <button type="button" class="boton secundario" id="btn-exportar-conciliacion"><i data-lucide=download class=ico></i> Exportar inconsistencias (Excel)</button>
+      <label class="check-linea filtro-check" title="Por defecto el PDF de presencia solo trae Solo SIMAT / Solo SAPRED">
+        <input type="checkbox" id="check-presencia-incluir-coincide" ${presenciaIncluirCoincide ? "checked" : ""} /> PDF: incluir los que coinciden
+      </label>
+      <button type="button" class="boton" id="btn-presencia-pdf"><i data-lucide=file-text class=ico></i> PDF de presencia (SIMAT/SAPRED)</button>
     </div>
 
     <div class="barra-filtros no-imprimir">
@@ -870,9 +1095,10 @@ function pintarConciliacion(contenedor, sedes) {
       <div class="metric-card"><span>SIMAC</span><strong>${r.resumen.total_simac}</strong></div>
       <div class="metric-card"><span>SAPRED</span><strong>${r.resumen.total_sapred}</strong></div>
       <div class="metric-card ok"><span>Coinciden</span><strong>${r.resumen.coinciden}</strong></div>
-      <div class="metric-card ${r.resumen.solo_simac ? "alerta" : "ok"}"><span>🔴 Solo SIMAC</span><strong>${r.resumen.solo_simac}</strong></div>
-      <div class="metric-card ${r.resumen.solo_sapred ? "alerta" : "ok"}"><span>🟠 Solo SAPRED</span><strong>${r.resumen.solo_sapred}</strong></div>
-      <div class="metric-card ${r.resumen.diferencias ? "proceso" : "ok"}"><span>🟡 Con diferencias</span><strong>${r.resumen.diferencias}</strong></div>
+      <div class="metric-card ${r.resumen.solo_simac ? "alerta" : "ok"}"><span><span class=punto-rojo></span>Solo SIMAC</span><strong>${r.resumen.solo_simac}</strong></div>
+      <div class="metric-card ${r.resumen.solo_sapred ? "alerta" : "ok"}"><span><span class=punto-naranja></span>Solo SAPRED</span><strong>${r.resumen.solo_sapred}</strong></div>
+      <div class="metric-card ${r.resumen.diferencias ? "proceso" : "ok"}"><span><span class=punto-amarillo></span>Con diferencias</span><strong>${r.resumen.diferencias}</strong></div>
+      <div class="metric-card ${r.resumen.candidatos_promocion_anticipada ? "alerta" : "ok"}" title="SAPRED ya lo tiene en un grado más alto que SIMAC: probablemente ya lo promovieron en la práctica y la matrícula no se actualizó"><span>Posible promoción anticipada</span><strong>${r.resumen.candidatos_promocion_anticipada}</strong></div>
       <div class="metric-card ${r.resumen.grupos_con_inconsistencias ? "alerta" : "ok"}"><span>Grupos pendientes</span><strong>${r.resumen.grupos_con_inconsistencias}</strong></div>
       <div class="metric-card ${r.resumen.docentes_pendientes ? "alerta" : "ok"}"><span>Docentes pendientes</span><strong>${r.resumen.docentes_pendientes}</strong></div>
     </div>
@@ -886,17 +1112,20 @@ function pintarConciliacion(contenedor, sedes) {
       <button type="button" class="subnav-item ${conciliacionVista === "estudiantes" ? "activo" : ""}" data-vista-conciliacion="estudiantes">Estudiantes</button>
       <button type="button" class="subnav-item ${conciliacionVista === "grupos" ? "activo" : ""}" data-vista-conciliacion="grupos">Grado y grupo</button>
       <button type="button" class="subnav-item ${conciliacionVista === "docentes" ? "activo" : ""}" data-vista-conciliacion="docentes">Por docente</button>
+      <button type="button" class="subnav-item ${conciliacionVista === "hallazgos" ? "activo" : ""}" data-vista-conciliacion="hallazgos"><i data-lucide=folder-open class=ico></i> Grilla — Promoción anticipada${r.resumen.candidatos_promocion_anticipada ? ` (${r.resumen.candidatos_promocion_anticipada})` : ""}</button>
     </nav>
 
     <div id="detalle-conciliacion">
       ${conciliacionVista === "estudiantes" ? htmlVistaEstudiantesConciliacion(filtrarEstudiantesConciliacion(r.estudiantes), docentesDisponibles) : ""}
       ${conciliacionVista === "grupos" ? htmlVistaGruposConciliacion(r.grupos) : ""}
       ${conciliacionVista === "docentes" ? htmlVistaDocentesConciliacion(r.docentes) : ""}
+      ${conciliacionVista === "hallazgos" ? '<div class="estado-carga">Cargando hallazgos...</div>' : ""}
     </div>
     <div id="modal-diferencia-conciliacion"></div>
   `;
 
   vincularConciliacion(contenedor, sedes);
+  if (conciliacionVista === "hallazgos") cargarYPintarHallazgos(contenedor, sedes);
 
   if (mantenerFocoBuscarConciliacion) {
     mantenerFocoBuscarConciliacion = false;
@@ -920,7 +1149,11 @@ function filaEstudianteConciliacionHtml(e) {
     <td>${e.nombre_grado}</td>
     <td>${e.nombre_grupo}</td>
     <td>${e.docente || "Sin asignar"}</td>
-    <td>${badgeEstadoConciliacionHtml(e.estado_conciliacion)}</td>
+    <td>${badgeEstadoConciliacionHtml(e.estado_conciliacion)}${
+      e.candidato_promocion_anticipada
+        ? ' <span class="badge-estado alerta" title="SAPRED ya lo tiene en un grado más alto: corregir en la matrícula del siguiente año">Promoción anticipada</span>'
+        : ""
+    }</td>
     <td>${acciones.join(" ")}</td>
   </tr>`;
 }
@@ -928,17 +1161,19 @@ function filaEstudianteConciliacionHtml(e) {
 function htmlVistaEstudiantesConciliacion(estudiantes, docentesDisponibles) {
   return `
     <div class="buscador-principal no-imprimir">
-      <span class="buscador-principal-icono" aria-hidden="true">🔎</span>
+      <span class="buscador-principal-icono" aria-hidden="true"><i data-lucide=search class=ico></i> </span>
       <input type="text" id="buscar-conciliacion" placeholder="Buscar por nombre o documento..." value="${conciliacionBusqueda}" />
     </div>
     <div class="barra-filtros no-imprimir">
       <label class="filtro-campo">Estado
         <select id="select-conciliacion-estado">
-          <option value="" ${conciliacionEstadoFiltro === "" ? "selected" : ""}>Todos</option>
-          <option value="coincide" ${conciliacionEstadoFiltro === "coincide" ? "selected" : ""}>🟢 Coincide</option>
-          <option value="solo_simac" ${conciliacionEstadoFiltro === "solo_simac" ? "selected" : ""}>🔴 Solo SIMAC</option>
-          <option value="solo_sapred" ${conciliacionEstadoFiltro === "solo_sapred" ? "selected" : ""}>🟠 Solo SAPRED</option>
-          <option value="diferencia" ${conciliacionEstadoFiltro === "diferencia" ? "selected" : ""}>🟡 Diferencia</option>
+          <option value="problemas" ${conciliacionEstadoFiltro === "problemas" ? "selected" : ""}>Solo con problemas (oculta los que coinciden)</option>
+          <option value="" ${conciliacionEstadoFiltro === "" ? "selected" : ""}>Todos (incluye los que coinciden)</option>
+          <option value="coincide" ${conciliacionEstadoFiltro === "coincide" ? "selected" : ""}>Solo coincide</option>
+          <option value="solo_simac" ${conciliacionEstadoFiltro === "solo_simac" ? "selected" : ""}>Solo SIMAC</option>
+          <option value="solo_sapred" ${conciliacionEstadoFiltro === "solo_sapred" ? "selected" : ""}>Solo SAPRED</option>
+          <option value="diferencia" ${conciliacionEstadoFiltro === "diferencia" ? "selected" : ""}>Diferencia</option>
+          <option value="promocion_anticipada" ${conciliacionEstadoFiltro === "promocion_anticipada" ? "selected" : ""}>Posible promoción anticipada</option>
         </select>
       </label>
       <label class="filtro-campo">Director / docente
@@ -955,14 +1190,14 @@ function htmlVistaEstudiantesConciliacion(estudiantes, docentesDisponibles) {
              <thead><tr><th>Estudiante</th><th>Documento</th><th>Grado</th><th>Grupo</th><th>Director</th><th>Estado</th><th></th></tr></thead>
              <tbody>${estudiantes.map(filaEstudianteConciliacionHtml).join("")}</tbody>
            </table></div>`
-        : `<div class="estado-vacio"><div class="estado-vacio-icono">✓</div><h3>Sin resultados para estos filtros</h3><p>Prueba cambiando el estado, el docente o la búsqueda.</p></div>`
+        : `<div class="estado-vacio"><div class="estado-vacio-icono"><i data-lucide=check class=ico></i> </div><h3>Sin resultados para estos filtros</h3><p>Prueba cambiando el estado, el docente o la búsqueda.</p></div>`
     }
   `;
 }
 
 function htmlVistaGruposConciliacion(grupos) {
   if (!grupos.length) {
-    return `<div class="estado-vacio"><div class="estado-vacio-icono">✓</div><h3>Sin grupos para este filtro</h3><p>Prueba cambiando la sede, el grado o el período.</p></div>`;
+    return `<div class="estado-vacio"><div class="estado-vacio-icono"><i data-lucide=check class=ico></i> </div><h3>Sin grupos para este filtro</h3><p>Prueba cambiando la sede, el grado o el período.</p></div>`;
   }
   return `
     <p class="conteo-resultados no-imprimir">${grupos.length} grupo(s)</p>
@@ -979,7 +1214,7 @@ function htmlVistaGruposConciliacion(grupos) {
           <td>${g.total_sapred}</td>
           <td>${g.coinciden}</td>
           <td>${g.solo_simac + g.solo_sapred + g.diferencias}</td>
-          <td>${g.estado === "correcto" ? '<span class="badge-estado ok">🟢 Correcto</span>' : '<span class="badge-estado alerta">🔴 Requiere revisión</span>'}</td>
+          <td>${g.estado === "correcto" ? '<span class="badge-estado ok"><span class=punto-verde></span>Correcto</span>' : '<span class="badge-estado alerta"><span class=punto-rojo></span>Requiere revisión</span>'}</td>
         </tr>`
           )
           .join("")}
@@ -990,7 +1225,7 @@ function htmlVistaGruposConciliacion(grupos) {
 
 function htmlVistaDocentesConciliacion(docentes) {
   if (!docentes.length) {
-    return `<div class="estado-vacio"><div class="estado-vacio-icono">✓</div><h3>Sin docentes para este filtro</h3><p>Prueba cambiando la sede, el grado o el período.</p></div>`;
+    return `<div class="estado-vacio"><div class="estado-vacio-icono"><i data-lucide=check class=ico></i> </div><h3>Sin docentes para este filtro</h3><p>Prueba cambiando la sede, el grado o el período.</p></div>`;
   }
   return docentes
     .map(
@@ -1000,7 +1235,7 @@ function htmlVistaDocentesConciliacion(docentes) {
         ${
           d.total_diferencias
             ? `<span class="badge-estado alerta">${d.total_diferencias} inconsistencia(s)</span>`
-            : '<span class="badge-estado ok">🟢 Todo correcto</span>'
+            : '<span class="badge-estado ok"><span class=punto-verde></span>Todo correcto</span>'
         }
       </summary>
       <div class="tabla-scroll"><table>
@@ -1013,7 +1248,7 @@ function htmlVistaDocentesConciliacion(docentes) {
             <td>${g.nombre_grupo}</td>
             <td>${g.total_simac}</td>
             <td>${g.total_sapred}</td>
-            <td>${g.estado === "correcto" ? '<span class="badge-estado ok">🟢 Correcto</span>' : '<span class="badge-estado alerta">🔴 Requiere revisión</span>'}</td>
+            <td>${g.estado === "correcto" ? '<span class="badge-estado ok"><span class=punto-verde></span>Correcto</span>' : '<span class="badge-estado alerta"><span class=punto-rojo></span>Requiere revisión</span>'}</td>
           </tr>`
             )
             .join("")}
@@ -1064,6 +1299,32 @@ function vincularConciliacion(contenedor, sedes) {
     // acceso venciera, aquí no habría forma de renovarlo ni de reintentar.
     await asegurarSesionFresca();
     window.location.href = `/api/reportes/conciliacion/exportar?${urlConciliacionParams()}`;
+  });
+  document.getElementById("check-presencia-incluir-coincide")?.addEventListener("change", (e) => {
+    presenciaIncluirCoincide = e.target.checked;
+  });
+  document.getElementById("btn-presencia-pdf")?.addEventListener("click", async (ev) => {
+    const btn = ev.currentTarget;
+    const sedeNombre = conciliacionSedeSeleccionada
+      ? (sedes.find((s) => String(s.id) === conciliacionSedeSeleccionada) || {}).nombre || ""
+      : "Todas las sedes IETABA";
+    btn.disabled = true;
+    btn.textContent = "Generando PDF...";
+    try {
+      await descargarPdfPresencia({
+        anio_lectivo: conciliacionAnio,
+        periodo: conciliacionPeriodo,
+        sede_id: conciliacionSedeSeleccionada ? Number(conciliacionSedeSeleccionada) : null,
+        grado: conciliacionGradoSeleccionado ? Number(conciliacionGradoSeleccionado) : null,
+        sede_nombre: sedeNombre,
+        incluir_coincide: presenciaIncluirCoincide,
+      });
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "PDF de presencia (SIMAT/SAPRED)";
+    }
   });
   document.getElementById("input-conciliacion-anio").addEventListener("change", (e) => {
     conciliacionAnio = Number(e.target.value) || conciliacionAnio;
@@ -1118,4 +1379,209 @@ function vincularConciliacion(contenedor, sedes) {
       if (estudiante) abrirModalDiferenciaConciliacion(estudiante);
     });
   });
+}
+
+// POST → blob → descarga. Mismo manejo de sesión que descargarPdfListaCupo().
+async function descargarPdfPresencia(cuerpo) {
+  const pedir = () =>
+    fetch("/api/reportes/conciliacion/presencia/pdf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cuerpo),
+    });
+  await asegurarSesionFresca();
+  let res = await pedir();
+  if (res.status === 401 && (await _intentarRefresh())) res = await pedir();
+  if (!res.ok) {
+    const detalle = await res.json().catch(() => ({}));
+    throw new Error(detalle.detail || `Error ${res.status} generando el PDF`);
+  }
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `presencia_simat_sapred_${fechaColombiaISO()}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+// --- Vista "Grilla" de Conciliación: historial persistente de casos de -----
+// grado distinto SIMAC/SAPRED (hallazgos_conciliacion en el backend). A
+// diferencia de las otras vistas (que solo leen el cálculo en vivo de
+// conciliar()), esta SÍ guarda: un caso no desaparece porque se corrija el
+// dato o se cambie de filtro, queda con fecha de detección, última vez
+// visto, y quién/cuándo lo resolvió — para no perder de un año a otro a
+// quién hay que hacerle una promoción anticipada en la matrícula.
+
+async function cargarYPintarHallazgos(contenedor, sedes) {
+  const destino = document.getElementById("detalle-conciliacion");
+  const params = new URLSearchParams({
+    anio_lectivo: conciliacionAnio,
+    periodo: conciliacionPeriodo,
+    incluir_resueltos: hallazgosIncluirResueltos ? "true" : "false",
+  });
+  if (conciliacionSedeSeleccionada) params.set("sede_id", conciliacionSedeSeleccionada);
+  if (conciliacionGradoSeleccionado) params.set("grado", conciliacionGradoSeleccionado);
+  let hallazgos;
+  try {
+    hallazgos = await api(`/api/reportes/conciliacion/hallazgos?${params}`);
+  } catch (err) {
+    destino.innerHTML = `<div class="alerta-caja">${err.message}</div>`;
+    return;
+  }
+  pintarHallazgos(destino, contenedor, sedes, hallazgos);
+}
+
+function fechaCortaHallazgo(iso) {
+  return new Date(iso).toLocaleDateString("es-CO");
+}
+
+function filaHallazgoHtml(h) {
+  return `<tr class="${h.resuelto ? "hallazgo-fila-resuelta" : ""}">
+    <td>${esc(h.nombre_completo)}</td>
+    <td class="celda-nowrap">${esc(h.documento)}</td>
+    <td class="celda-nowrap">${esc(h.sede_nombre)}</td>
+    <td class="celda-nowrap">${esc(h.nombre_grupo_simac)}</td>
+    <td class="celda-nowrap">${esc(h.nombre_grupo_sapred)}${
+      h.es_promocion_anticipada ? ' <span class="badge-estado alerta"><i data-lucide=arrow-up class=ico></i> Promoción anticipada</span>' : ""
+    }</td>
+    <td class="celda-nowrap">${fechaCortaHallazgo(h.detectado_en)}</td>
+    <td class="celda-nowrap">${fechaCortaHallazgo(h.visto_en)}</td>
+    <td>${
+      h.resuelto
+        ? `<span class="badge-estado ok"><i data-lucide=check class=ico></i> Resuelto</span><br/><span class="pendiente">${esc(h.resuelto_por || "")} · ${fechaCortaHallazgo(h.resuelto_en)}${h.nota ? " · " + esc(h.nota) : ""}</span>`
+        : `<span class="badge-estado alerta">Pendiente</span>`
+    }</td>
+    <td class="no-imprimir celda-nowrap">
+      ${
+        h.resuelto
+          ? `<button type="button" class="boton secundario" data-reabrir-hallazgo="${h.id}"><i data-lucide=undo-2 class=ico></i> Reabrir</button>`
+          : `<button type="button" class="boton secundario" data-resolver-hallazgo="${h.id}"><i data-lucide=check class=ico></i> Marcar resuelto</button>`
+      }
+    </td>
+  </tr>`;
+}
+
+function htmlGradoHallazgos(grado, filas) {
+  return `
+    <p class="grupo" style="margin-top:16px">${nombreGradoLista(grado)} <span>(${filas.length})</span></p>
+    <div class="tabla-scroll"><table>
+      <thead><tr>
+        <th>Nombre</th><th>Documento</th><th>Sede</th>
+        <th>SIMAC dice</th><th>SAPRED dice</th>
+        <th>Detectado</th><th>Visto por última vez</th>
+        <th>Estado</th><th class="no-imprimir">Acciones</th>
+      </tr></thead>
+      <tbody>${filas.map(filaHallazgoHtml).join("")}</tbody>
+    </table></div>
+  `;
+}
+
+function pintarHallazgos(destino, contenedor, sedes, hallazgos) {
+  const porGrado = new Map();
+  hallazgos.forEach((h) => porGrado.set(h.grado_simac, [...(porGrado.get(h.grado_simac) || []), h]));
+  const grados = [...porGrado.keys()].sort((a, b) => a - b);
+
+  const sedeNombre = conciliacionSedeSeleccionada
+    ? (sedes.find((s) => String(s.id) === conciliacionSedeSeleccionada) || {}).nombre || ""
+    : "Todas las sedes IETABA";
+
+  destino.innerHTML = `
+    <div class="barra-filtros no-imprimir">
+      <label class="check-linea filtro-check">
+        <input type="checkbox" id="check-hallazgos-resueltos" ${hallazgosIncluirResueltos ? "checked" : ""} /> Incluir ya resueltos (historial completo)
+      </label>
+      <button type="button" class="boton" id="btn-hallazgos-pdf" ${hallazgos.length ? "" : "disabled"}><i data-lucide=file-text class=ico></i> Descargar PDF</button>
+      <button type="button" class="boton secundario" onclick="window.print()"><i data-lucide=printer class=ico></i> Imprimir</button>
+    </div>
+    <div class="hoja-imprimir">
+      <h2 style="margin:6px 0">Casos de grado distinto entre SIMAC y SAPRED</h2>
+      <p class="pendiente">Esta grilla se guarda aunque se corrija el dato o se cambie de filtro: queda como historial, con cuándo se detectó cada caso y quién lo resolvió — para no perder de un año a otro a quién hay que promoverle el grado en la próxima matrícula.</p>
+      ${
+        !hallazgos.length
+          ? `<div class="estado-vacio"><div class="estado-vacio-icono"><i data-lucide=check class=ico></i> </div><h3>No hay casos ${hallazgosIncluirResueltos ? "" : "pendientes "}para este filtro</h3></div>`
+          : grados.map((g) => htmlGradoHallazgos(g, porGrado.get(g))).join("")
+      }
+    </div>
+  `;
+  vincularHallazgos(destino, contenedor, sedes, hallazgos, sedeNombre);
+}
+
+// POST → blob → descarga. Mismo manejo de sesión que descargarPdfListaCupo().
+async function descargarPdfHallazgos(cuerpo) {
+  const pedir = () =>
+    fetch("/api/reportes/conciliacion/hallazgos/pdf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cuerpo),
+    });
+  await asegurarSesionFresca();
+  let res = await pedir();
+  if (res.status === 401 && (await _intentarRefresh())) res = await pedir();
+  if (!res.ok) {
+    const detalle = await res.json().catch(() => ({}));
+    throw new Error(detalle.detail || `Error ${res.status} generando el PDF`);
+  }
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `diferencias_grado_simat_sapred_${fechaColombiaISO()}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+function vincularHallazgos(destino, contenedor, sedes, hallazgos, sedeNombre) {
+  document.getElementById("check-hallazgos-resueltos")?.addEventListener("change", (e) => {
+    hallazgosIncluirResueltos = e.target.checked;
+    cargarYPintarHallazgos(contenedor, sedes);
+  });
+  document.getElementById("btn-hallazgos-pdf")?.addEventListener("click", async (ev) => {
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    btn.textContent = "Generando PDF...";
+    try {
+      await descargarPdfHallazgos({
+        ids: hallazgos.map((h) => h.id),
+        anio_lectivo: conciliacionAnio,
+        periodo: conciliacionPeriodo,
+        sede_nombre: sedeNombre,
+        incluir_resueltos: hallazgosIncluirResueltos,
+      });
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Descargar PDF";
+    }
+  });
+  destino.querySelectorAll("[data-resolver-hallazgo]").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const nota = prompt('Nota (opcional) — ej. "corregido en la matrícula 2027":', "") ?? "";
+      const resuelto_por = (typeof sesionActual !== "undefined" && sesionActual?.usuario?.nombre) || "";
+      btn.disabled = true;
+      try {
+        await api(`/api/reportes/conciliacion/hallazgos/${btn.dataset.resolverHallazgo}/resolver`, {
+          method: "POST",
+          body: JSON.stringify({ resuelto_por, nota: nota || null }),
+        });
+      } catch (err) {
+        alert(err.message);
+      }
+      cargarYPintarHallazgos(contenedor, sedes);
+    })
+  );
+  destino.querySelectorAll("[data-reabrir-hallazgo]").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      try {
+        await api(`/api/reportes/conciliacion/hallazgos/${btn.dataset.reabrirHallazgo}/reabrir`, { method: "POST" });
+      } catch (err) {
+        alert(err.message);
+      }
+      cargarYPintarHallazgos(contenedor, sedes);
+    })
+  );
 }

@@ -46,7 +46,7 @@ async function verificarDocumento() {
 
   contenedor.innerHTML = `
     <div class="alerta-caja">
-      ⚠️ Este documento <strong>no aparece</strong> en la base de datos oficial de matrícula
+      <i data-lucide=triangle-alert class=ico></i> Este documento <strong>no aparece</strong> en la base de datos oficial de matrícula
       importada del colegio. Antes de matricularlo aquí, confírmalo con el coordinador
       (puede ser un estudiante nuevo que aún no está en el Excel oficial, o un error de
       digitación en el documento).

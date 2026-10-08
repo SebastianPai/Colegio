@@ -7,8 +7,16 @@ EstudianteSapredSinCoincidencia para los que SAPRED reporta pero no calzan
 por documento).
 
 No es una fuente de datos nueva: solo lee lo que ya existe y lo clasifica.
-No se guarda nada — se recalcula cada vez que se pide, a partir del estado
-actual de la base de datos.
+La clasificación en sí no se guarda — se recalcula cada vez que se pide, a
+partir del estado actual de la base de datos.
+
+La EXCEPCIÓN es la diferencia de grupo (SIMAC dice un grado/curso, SAPRED
+dice otro): esa sí se registra en hallazgos_conciliacion (ver
+_sincronizar_hallazgos), porque si solo viviera en el cálculo en vivo,
+corregir el dato (o simplemente cambiar de filtro) haría desaparecer el
+caso sin dejar rastro de que existió, cuándo se detectó o si alguien ya lo
+revisó — justo lo que se necesita para planear promociones anticipadas de
+un año a otro.
 """
 
 import datetime as dt
@@ -68,14 +76,19 @@ def conciliar(
     ]
 
     # --- Evidencia SAPRED: revisiones de este año/período, con sus notas ---
+    # OJO: no se filtra por "grado" aquí aunque el reporte lo esté mirando —
+    # un estudiante puede estar mal matriculado en SIMAC (ej. figura en Sexto
+    # cuando SAPRED, la fuente oficial, lo tiene en Séptimo). Si la evidencia
+    # SAPRED se restringiera al mismo grado que se está filtrando, ese caso
+    # nunca se encontraría (la nota vive en la revisión de Séptimo) y el
+    # estudiante saldría como "solo_simac" en vez de "diferencia" — ocultando
+    # justo el dato que se necesita (a qué grupo pertenece según SAPRED).
     consulta_revisiones = select(models.RevisionBoletin).where(
         models.RevisionBoletin.anio_lectivo == anio_lectivo,
         models.RevisionBoletin.periodo == periodo,
     )
     if sede_id is not None:
         consulta_revisiones = consulta_revisiones.where(models.RevisionBoletin.sede_id == sede_id)
-    if grado is not None:
-        consulta_revisiones = consulta_revisiones.where(models.RevisionBoletin.grado == grado)
     revisiones = {r.id: r for r in db.scalars(consulta_revisiones).all()}
 
     evidencia_sapred: dict[int, dict] = {}  # estudiante_id -> {revision, nombre_sapred, actualizado_en}
@@ -122,6 +135,12 @@ def conciliar(
         return grupos_acc[clave]
 
     estudiantes_resultado: list[schemas.ConciliacionEstudiante] = []
+    # Diferencias de grupo encontradas en esta corrida: alimentan el
+    # historial persistente de hallazgos_conciliacion (ver
+    # _sincronizar_hallazgos más abajo) — la conciliación en sí no guarda
+    # nada, pero esto sí, para no perder de vista casos como este aunque se
+    # corrija el dato o cambie el filtro con el que se mira el reporte.
+    hallazgos_grupo: list[dict] = []
 
     for e in estudiantes_simac:
         grupo = _acc_grupo(e.sede_id, e.grado, e.curso)
@@ -145,6 +164,7 @@ def conciliar(
         grupo["total_sapred"] += 1
         revision = info["revision"]
         diferencias: list[schemas.ConciliacionDiferencia] = []
+        candidato_promocion = False
         if revision.grado != e.grado or revision.curso != e.curso:
             diferencias.append(
                 schemas.ConciliacionDiferencia(
@@ -152,6 +172,25 @@ def conciliar(
                     valor_simac=_nombre_grupo(e.grado, e.curso),
                     valor_sapred=_nombre_grupo(revision.grado, revision.curso),
                 )
+            )
+            # SAPRED refleja el grupo donde el estudiante realmente está
+            # tomando clase (el profesor le pone notas ahí); si ese grado es
+            # MAYOR al que tiene SIMAC, no es un simple error de digitación —
+            # es un caso de promoción ya ocurrida en la práctica que la
+            # matrícula (SIMAC) todavía no refleja, y hay que corregirla en
+            # la matrícula del siguiente año (promoción anticipada), no solo
+            # actualizar el dato.
+            candidato_promocion = revision.grado > e.grado
+            hallazgos_grupo.append(
+                {
+                    "estudiante_id": e.id,
+                    "sede_id": e.sede_id,
+                    "grado_simac": e.grado,
+                    "curso_simac": e.curso,
+                    "grado_sapred": revision.grado,
+                    "curso_sapred": revision.curso,
+                    "es_promocion_anticipada": candidato_promocion,
+                }
             )
         nombre_sapred = info["nombre_sapred"]
         if nombre_sapred and normalizar_texto(nombre_sapred) != normalizar_texto(e.nombre_completo):
@@ -175,6 +214,7 @@ def conciliar(
                 docente=docente_nombre,
                 estado_conciliacion="diferencia" if diferencias else "coincide",
                 diferencias=diferencias,
+                candidato_promocion_anticipada=candidato_promocion,
             )
         )
 
@@ -293,12 +333,153 @@ def conciliar(
         grupos_con_inconsistencias=sum(1 for g in grupos if g.estado == "requiere_revision"),
         docentes_pendientes=sum(1 for d in docentes if d.total_diferencias > 0),
         calidad_pct=calidad_pct,
+        candidatos_promocion_anticipada=sum(1 for r in estudiantes_resultado if r.candidato_promocion_anticipada),
+    )
+
+    _sincronizar_hallazgos(
+        db, anio_lectivo, periodo,
+        hallazgos_actuales=hallazgos_grupo,
+        ids_en_alcance={e.id for e in estudiantes_simac},
     )
 
     return schemas.ConciliacionResultado(
         generado_en=dt.datetime.now(), resumen=resumen,
         estudiantes=estudiantes_resultado, grupos=grupos, docentes=docentes,
     )
+
+
+def _sincronizar_hallazgos(
+    db: Session,
+    anio_lectivo: int,
+    periodo: int,
+    hallazgos_actuales: list[dict],
+    ids_en_alcance: set[int],
+) -> None:
+    """Registra cada diferencia de grupo detectada AHORA (crea el hallazgo
+    la primera vez, o le actualiza "visto_en" y los valores si seguía sin
+    resolver) y cierra solos los que ya no aplican porque el dato se
+    corrigió — sin borrarlos, para que quede el historial.
+
+    "ids_en_alcance" son los estudiantes que esta corrida realmente revisó
+    (respeta los filtros de sede/grado con los que se pidió la
+    conciliación): un hallazgo de un estudiante FUERA de ese alcance no se
+    toca, para no cerrarlo por error solo porque el reporte se miró filtrado
+    a otro grado."""
+    actuales_por_id = {h["estudiante_id"]: h for h in hallazgos_actuales}
+    existentes = {
+        h.estudiante_id: h
+        for h in db.scalars(
+            select(models.HallazgoConciliacion).where(
+                models.HallazgoConciliacion.anio_lectivo == anio_lectivo,
+                models.HallazgoConciliacion.periodo == periodo,
+                models.HallazgoConciliacion.estudiante_id.in_(ids_en_alcance),
+            )
+        ).all()
+    }
+    ahora = dt.datetime.utcnow()
+
+    for estudiante_id, datos in actuales_por_id.items():
+        existente = existentes.get(estudiante_id)
+        if existente is None:
+            db.add(
+                models.HallazgoConciliacion(
+                    estudiante_id=estudiante_id, anio_lectivo=anio_lectivo, periodo=periodo,
+                    sede_id=datos["sede_id"], grado_simac=datos["grado_simac"], curso_simac=datos["curso_simac"],
+                    grado_sapred=datos["grado_sapred"], curso_sapred=datos["curso_sapred"],
+                    es_promocion_anticipada=datos["es_promocion_anticipada"],
+                    detectado_en=ahora, visto_en=ahora,
+                )
+            )
+        elif not existente.resuelto:
+            existente.visto_en = ahora
+            existente.sede_id = datos["sede_id"]
+            existente.grado_simac, existente.curso_simac = datos["grado_simac"], datos["curso_simac"]
+            existente.grado_sapred, existente.curso_sapred = datos["grado_sapred"], datos["curso_sapred"]
+            existente.es_promocion_anticipada = datos["es_promocion_anticipada"]
+        # si ya estaba resuelto y la diferencia reapareció, se deja como
+        # historial cerrado — no se reabre sola, eso lo decide una persona.
+
+    for estudiante_id, h in existentes.items():
+        if not h.resuelto and estudiante_id not in actuales_por_id:
+            h.resuelto = True
+            h.resuelto_en = ahora
+            h.resuelto_por = "Automático"
+            nota_cierre = "Cerrado automáticamente: SIMAC y SAPRED ya coinciden."
+            h.nota = f"{h.nota} · {nota_cierre}" if h.nota else nota_cierre
+
+    db.commit()
+
+
+def _hallazgo_a_schema(h: models.HallazgoConciliacion) -> schemas.HallazgoConciliacion:
+    return schemas.HallazgoConciliacion(
+        id=h.id, estudiante_id=h.estudiante_id,
+        documento=h.estudiante.documento, nombre_completo=h.estudiante.nombre_completo,
+        sede_id=h.sede_id, sede_nombre=h.sede.nombre if h.sede else "",
+        anio_lectivo=h.anio_lectivo, periodo=h.periodo,
+        grado_simac=h.grado_simac, curso_simac=h.curso_simac,
+        nombre_grupo_simac=_nombre_grupo(h.grado_simac, h.curso_simac),
+        grado_sapred=h.grado_sapred, curso_sapred=h.curso_sapred,
+        nombre_grupo_sapred=_nombre_grupo(h.grado_sapred, h.curso_sapred),
+        es_promocion_anticipada=h.es_promocion_anticipada,
+        detectado_en=h.detectado_en, visto_en=h.visto_en,
+        resuelto=h.resuelto, resuelto_en=h.resuelto_en, resuelto_por=h.resuelto_por, nota=h.nota,
+    )
+
+
+def listar_hallazgos(
+    db: Session,
+    anio_lectivo: int | None = None,
+    periodo: int | None = None,
+    sede_id: int | None = None,
+    grado: int | None = None,
+    incluir_resueltos: bool = False,
+) -> list[schemas.HallazgoConciliacion]:
+    """Grilla de hallazgos de grupo (SIMAC ↔ SAPRED) para Reportes →
+    Conciliación → Grilla: a diferencia de conciliar(), esto SÍ lee del
+    historial persistente (hallazgos_conciliacion), así que sigue mostrando
+    los casos ya corregidos si se pide "incluir resueltos", en vez de que
+    desaparezcan sin dejar rastro."""
+    consulta = select(models.HallazgoConciliacion)
+    if anio_lectivo is not None:
+        consulta = consulta.where(models.HallazgoConciliacion.anio_lectivo == anio_lectivo)
+    if periodo is not None:
+        consulta = consulta.where(models.HallazgoConciliacion.periodo == periodo)
+    if sede_id is not None:
+        consulta = consulta.where(models.HallazgoConciliacion.sede_id == sede_id)
+    if grado is not None:
+        consulta = consulta.where(models.HallazgoConciliacion.grado_simac == grado)
+    if not incluir_resueltos:
+        consulta = consulta.where(models.HallazgoConciliacion.resuelto.is_(False))
+
+    resultado = [_hallazgo_a_schema(h) for h in db.scalars(consulta).all()]
+    resultado.sort(key=lambda h: (h.sede_nombre, h.grado_simac, h.curso_simac or 0, h.nombre_completo))
+    return resultado
+
+
+def resolver_hallazgo(
+    db: Session, hallazgo_id: int, resuelto_por: str | None, nota: str | None
+) -> schemas.HallazgoConciliacion | None:
+    hallazgo = db.get(models.HallazgoConciliacion, hallazgo_id)
+    if hallazgo is None:
+        return None
+    hallazgo.resuelto = True
+    hallazgo.resuelto_en = dt.datetime.utcnow()
+    hallazgo.resuelto_por = resuelto_por or "Sin especificar"
+    if nota:
+        hallazgo.nota = nota
+    db.commit()
+    return _hallazgo_a_schema(hallazgo)
+
+
+def reabrir_hallazgo(db: Session, hallazgo_id: int) -> schemas.HallazgoConciliacion | None:
+    hallazgo = db.get(models.HallazgoConciliacion, hallazgo_id)
+    if hallazgo is None:
+        return None
+    hallazgo.resuelto = False
+    hallazgo.resuelto_en = None
+    hallazgo.resuelto_por = None
+    db.commit()
+    return _hallazgo_a_schema(hallazgo)
 
 
 def exportar_conciliacion_excel(resultado: schemas.ConciliacionResultado) -> bytes:
@@ -323,7 +504,7 @@ def exportar_conciliacion_excel(resultado: schemas.ConciliacionResultado) -> byt
     hoja.append([])
     encabezados = [
         "Estado", "Documento", "Estudiante", "Grado", "Grupo", "Director",
-        "Dato diferente", "Valor SIMAC", "Valor SAPRED",
+        "Dato diferente", "Valor SIMAC", "Valor SAPRED", "Posible promoción anticipada",
     ]
     hoja.append(encabezados)
     for celda in hoja[hoja.max_row]:
@@ -333,19 +514,20 @@ def exportar_conciliacion_excel(resultado: schemas.ConciliacionResultado) -> byt
         if e.estado_conciliacion == "coincide":
             continue
         etiqueta = ETIQUETAS_ESTADO.get(e.estado_conciliacion, e.estado_conciliacion)
+        promocion = "Sí — corregir en la matrícula del siguiente año" if e.candidato_promocion_anticipada else ""
         if e.diferencias:
             for d in e.diferencias:
                 hoja.append([
                     etiqueta, e.documento, e.nombre_completo, e.nombre_grado, e.nombre_grupo,
-                    e.docente or "Sin asignar", d.campo, d.valor_simac, d.valor_sapred,
+                    e.docente or "Sin asignar", d.campo, d.valor_simac, d.valor_sapred, promocion,
                 ])
         else:
             hoja.append([
                 etiqueta, e.documento, e.nombre_completo, e.nombre_grado, e.nombre_grupo,
-                e.docente or "Sin asignar", "-", "-", "-",
+                e.docente or "Sin asignar", "-", "-", "-", promocion,
             ])
 
-    for columna, ancho in zip(hoja.columns, [14, 14, 30, 12, 16, 26, 14, 20, 20]):
+    for columna, ancho in zip(hoja.columns, [14, 14, 30, 12, 16, 26, 14, 20, 20, 34]):
         hoja.column_dimensions[columna[0].column_letter].width = ancho
 
     buffer = io.BytesIO()

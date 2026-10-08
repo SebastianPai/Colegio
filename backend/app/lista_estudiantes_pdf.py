@@ -72,6 +72,7 @@ COLUMNAS = {
         lambda e, hoy: "Retirado" if e.retirado else ("Posible retiro" if e.posible_retirado else ""),
         1.8,
     ),
+    "resguardo": ("Resguardo", lambda e, hoy: "Sí" if e.resguardo else "No", 1.6),
     "observaciones": ("Observaciones", lambda e, hoy: e.observaciones or "", 3.5),
     "firma": ("Firma", lambda e, hoy: "", 3),
 }

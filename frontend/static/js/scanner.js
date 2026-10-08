@@ -147,9 +147,9 @@ async function iniciarVistaCamara(overlay, estado, cerrar) {
   overlay.innerHTML = `
     <div class="escaner-camara">
       <div class="escaner-topbar">
-        <button type="button" class="escaner-icono-btn" id="escaner-cerrar" aria-label="Cerrar escáner">✕</button>
+        <button type="button" class="escaner-icono-btn" id="escaner-cerrar" aria-label="Cerrar escáner"></button>
         <span class="escaner-titulo-modulo">${estado.titulo}</span>
-        <button type="button" class="escaner-icono-btn" id="escaner-cambiar-camara" aria-label="Cambiar cámara" title="Cambiar cámara">🔄</button>
+        <button type="button" class="escaner-icono-btn" id="escaner-cambiar-camara" aria-label="Cambiar cámara" title="Cambiar cámara"></button>
       </div>
       <div class="escaner-video-wrap">
         <video id="escaner-video" playsinline muted autoplay></video>
@@ -210,7 +210,7 @@ function iniciarBucleDeteccion(estado, video, canvasOverlay, etiquetaEstado) {
       const corners = detectarEsquinas(video);
       estado.ultimosCorners = corners;
       pintarOverlayEsquinas(canvasOverlay, video, corners);
-      etiquetaEstado.textContent = corners ? "Documento detectado ✓" : "Buscando documento...";
+      etiquetaEstado.textContent = corners ? "Documento detectado " : "Buscando documento...";
       etiquetaEstado.classList.toggle("detectado", !!corners);
     }
     estado.deteccionTimer = setTimeout(paso, 220);
@@ -416,7 +416,7 @@ function mostrarAjusteBordes(overlay, estado, cerrar, canvasCaptura, cornersInic
   overlay.innerHTML = `
     <div class="escaner-ajuste">
       <div class="escaner-topbar">
-        <button type="button" class="escaner-icono-btn" id="escaner-ajuste-repetir" aria-label="Repetir foto">✕</button>
+        <button type="button" class="escaner-icono-btn" id="escaner-ajuste-repetir" aria-label="Repetir foto"></button>
         <span class="escaner-titulo-modulo">Ajustar bordes</span>
         <span style="width:38px"></span>
       </div>
@@ -428,7 +428,7 @@ function mostrarAjusteBordes(overlay, estado, cerrar, canvasCaptura, cornersInic
       </div>
       <div class="escaner-revision-acciones">
         <button type="button" class="boton secundario" id="escaner-ajuste-completo">Usar toda la imagen</button>
-        <button type="button" class="boton" id="escaner-ajuste-listo">✓ Recortar</button>
+        <button type="button" class="boton" id="escaner-ajuste-listo"><i data-lucide=check class=ico></i> Recortar</button>
       </div>
     </div>
   `;
@@ -674,7 +674,7 @@ function pintarRevisionPagina(overlay, estado, cerrar) {
   overlay.innerHTML = `
     <div class="escaner-revision">
       <div class="escaner-topbar">
-        <button type="button" class="escaner-icono-btn" id="escaner-descartar" aria-label="Descartar y repetir">✕</button>
+        <button type="button" class="escaner-icono-btn" id="escaner-descartar" aria-label="Descartar y repetir"></button>
         <span class="escaner-titulo-modulo">Revisar página</span>
         <span style="width:38px"></span>
       </div>
@@ -685,8 +685,8 @@ function pintarRevisionPagina(overlay, estado, cerrar) {
         ${MODOS_MEJORA.map((m) => `<button type="button" class="escaner-modo-btn ${rev.modo === m.id ? "activo" : ""}" data-modo="${m.id}">${m.label}</button>`).join("")}
       </div>
       <div class="escaner-revision-acciones">
-        <button type="button" class="boton secundario" id="escaner-repetir">↺ Repetir</button>
-        <button type="button" class="boton" id="escaner-usar-pagina">✓ Usar esta página</button>
+        <button type="button" class="boton secundario" id="escaner-repetir"><i data-lucide=rotate-ccw class=ico></i> Repetir</button>
+        <button type="button" class="boton" id="escaner-usar-pagina"><i data-lucide=check class=ico></i> Usar esta página</button>
       </div>
     </div>
   `;
@@ -733,7 +733,7 @@ function mostrarPaginas(overlay, estado, cerrar) {
           <div class="escaner-miniatura-pagina">
             <img src="${p.dataUrl}" alt="Página ${i + 1}" />
             <span class="escaner-miniatura-numero">${i + 1}</span>
-            <button type="button" class="escaner-miniatura-quitar" data-quitar-pagina="${i}" aria-label="Eliminar página ${i + 1}">✕</button>
+            <button type="button" class="escaner-miniatura-quitar" data-quitar-pagina="${i}" aria-label="Eliminar página ${i + 1}"></button>
           </div>`
           )
           .join("")}
@@ -817,7 +817,7 @@ function pintarCargando(overlay, texto) {
 }
 
 function pintarExito(overlay, texto) {
-  overlay.innerHTML = `<div class="escaner-centro"><div class="escaner-icono-exito">✓</div><p>${texto}</p></div>`;
+  overlay.innerHTML = `<div class="escaner-centro"><div class="escaner-icono-exito"><i data-lucide=check class=ico></i> </div><p>${texto}</p></div>`;
 }
 
 function pintarError(overlay, texto, alReintentar) {

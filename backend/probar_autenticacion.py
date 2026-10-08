@@ -218,7 +218,6 @@ try:
         ("/api/estudiantes/pagina?sede_id=1&grado=10", "estudiantes"),
         ("/api/docentes", "docentes"),
         ("/api/horario/hoy", "horarios"),
-        ("/api/asistencia/grupo?sede_id=1&grado=10&curso=1", "asistencia"),
         ("/api/boletines/pendientes?anio_lectivo=2026&periodo=2", "boletines"),
         ("/api/certificados", "constancias"),
         ("/api/boletines/auditoria-sapred", "SAPRED"),

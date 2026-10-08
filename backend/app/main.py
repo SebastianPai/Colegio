@@ -8,12 +8,19 @@ from . import migraciones
 from .routers import (
     academico,
     admin,
+    alertas,
     asistencia,
     auth,
     certificados,
+    diagnostico,
+    docente,
     estudiantes,
     fotos,
     horario,
+    icfes,
+    orientacion,
+    promocion,
+    sistema,
     reportes,
     sedes,
 )
@@ -26,14 +33,21 @@ app = FastAPI(title="Sistema Colegio")
 
 app.include_router(auth.router)
 app.include_router(admin.router)
+app.include_router(alertas.router)
+app.include_router(promocion.router)
+app.include_router(sistema.router)
 app.include_router(sedes.router)
 app.include_router(estudiantes.router)
 app.include_router(asistencia.router)
+app.include_router(docente.router)
+app.include_router(orientacion.router)
+app.include_router(diagnostico.router)
 app.include_router(fotos.router)
 app.include_router(certificados.router)
 app.include_router(academico.router)
 app.include_router(horario.router)
 app.include_router(reportes.router)
+app.include_router(icfes.router)
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
 

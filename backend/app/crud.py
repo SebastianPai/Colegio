@@ -2,9 +2,11 @@ import datetime as dt
 import json
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
-from . import models, schemas
+from . import conciliacion, fechas, models, schemas
+from .certificados import MESES_TEXTO
+from .texto import sin_tildes
 
 # SAPRED usa códigos de área inconsistentes según el grado: en noveno el
 # "Consolidado" / "Boletín" trae LENGUA EXTRANJERA INGLÉS con el código
@@ -124,8 +126,11 @@ def _filtrar_estudiantes(
     if solo_no_verificados:
         stmt = stmt.where(models.Estudiante.verificado_matricula.is_(False))
     if busqueda:
-        patron = f"%{busqueda.lower()}%"
-        nombre_completo = func.lower(
+        # Sin tildes y sin distinguir mayúsculas de ambos lados: "bolanos",
+        # "BOLAÑOS" y "Bolaños" encuentran a los mismos. (El lower() de SQLite
+        # no pliega la Ñ, por eso no bastaba con pasar el patrón a minúscula.)
+        patron = f"%{sin_tildes(busqueda)}%"
+        nombre_completo = func.sin_tildes(
             models.Estudiante.primer_nombre
             + " "
             + func.coalesce(models.Estudiante.segundo_nombre, "")
@@ -135,7 +140,7 @@ def _filtrar_estudiantes(
             + func.coalesce(models.Estudiante.segundo_apellido, "")
         )
         stmt = stmt.where(
-            nombre_completo.like(patron) | func.lower(models.Estudiante.documento).like(patron)
+            nombre_completo.like(patron) | func.sin_tildes(models.Estudiante.documento).like(patron)
         )
     return stmt
 
@@ -368,6 +373,113 @@ def listar_constancias(
 
 def listar_docentes(db: Session) -> list[models.Docente]:
     return list(db.scalars(select(models.Docente).order_by(models.Docente.nombre_completo)).all())
+
+
+def _grupo_label(grado: int, curso: int | None) -> str:
+    grado_txt = models.GRADOS_NOMBRES.get(grado, str(grado))
+    return f"{grado_txt} - {curso}" if curso else grado_txt
+
+
+def listar_docentes_reporte(
+    db: Session, anio_lectivo: int, sede_id: int | None = None
+) -> list[dict]:
+    """Docentes con sus asignaciones del año, para el reporte dinámico de
+    Reportes → Lista de docentes. Un docente puede tener varias filas (una
+    por grupo/área); aquí se agrupan por docente y cada asignación se marca
+    con su "tipo": AREA (dicta una materia puntual), DIRECTOR (responde por
+    todo un grupo que también tiene profesores de área) o GRUPO (maestro
+    único de un grupo, típico rural). "Responsable de grupo" (es_responsable_
+    grupo) agrupa DIRECTOR y GRUPO: son los docentes que, en la práctica,
+    dirigen un grupo completo — la distinción que pidió el usuario entre
+    "todos" y "solo directores"."""
+    asignaciones = list(
+        db.scalars(
+            select(models.AsignacionDocente)
+            .where(models.AsignacionDocente.anio_lectivo == anio_lectivo)
+            .options(
+                selectinload(models.AsignacionDocente.docente),
+                selectinload(models.AsignacionDocente.sede),
+                selectinload(models.AsignacionDocente.area),
+            )
+        ).all()
+    )
+    grupos_con_area = {(a.sede_id, a.grado, a.curso) for a in asignaciones if a.area_id is not None}
+
+    por_docente: dict[int, dict] = {}
+    for a in asignaciones:
+        if sede_id and a.sede_id != sede_id:
+            continue
+        d = por_docente.setdefault(
+            a.docente_id,
+            {
+                "id": a.docente.id,
+                "documento": a.docente.documento,
+                "nombre_completo": a.docente.nombre_completo,
+                "fecha_nacimiento": a.docente.fecha_nacimiento,
+                "telefono": a.docente.telefono,
+                "email": a.docente.email,
+                "direccion": a.docente.direccion,
+                "asignaciones": [],
+                "grupos_dirige": [],
+                "es_responsable_grupo": False,
+            },
+        )
+        sede_nombre = a.sede.nombre if a.sede else ""
+        label = _grupo_label(a.grado, a.curso)
+        if a.area_id is not None:
+            tipo = "AREA"
+        elif (a.sede_id, a.grado, a.curso) in grupos_con_area:
+            tipo = "DIRECTOR"
+        else:
+            tipo = "GRUPO"
+        d["asignaciones"].append(
+            {
+                "sede_id": a.sede_id,
+                "sede_nombre": sede_nombre,
+                "grado": a.grado,
+                "grado_nombre": models.GRADOS_NOMBRES.get(a.grado, str(a.grado)),
+                "curso": a.curso,
+                "grupo_label": label,
+                "area_id": a.area_id,
+                "area_nombre": a.area.nombre if a.area else None,
+                "tipo": tipo,
+            }
+        )
+        if tipo in ("DIRECTOR", "GRUPO"):
+            d["es_responsable_grupo"] = True
+            if (label, sede_nombre) not in d["grupos_dirige"]:
+                d["grupos_dirige"].append((label, sede_nombre))
+
+    # Docentes sin ninguna asignación este año (recién importados, por ej.)
+    # también deben poder salir listados en "todos".
+    if not sede_id:
+        ids_con_asignacion = set(por_docente)
+        for doc in db.scalars(select(models.Docente).order_by(models.Docente.nombre_completo)).all():
+            if doc.id not in ids_con_asignacion:
+                por_docente[doc.id] = {
+                    "id": doc.id,
+                    "documento": doc.documento,
+                    "nombre_completo": doc.nombre_completo,
+                    "fecha_nacimiento": doc.fecha_nacimiento,
+                    "telefono": doc.telefono,
+                    "email": doc.email,
+                    "direccion": doc.direccion,
+                    "asignaciones": [],
+                    "grupos_dirige": [],
+                    "es_responsable_grupo": False,
+                }
+
+    # El nombre de la sede solo se agrega a la etiqueta si el docente
+    # realmente dirige grupos en más de una sede (raro); si es una sola, ya
+    # sale en la columna "Sede(s)" y repetirla ahí es puro ruido.
+    for d in por_docente.values():
+        sedes_distintas = {s for _, s in d["grupos_dirige"] if s}
+        d["grupos_dirige"] = [
+            f"{label} ({sede})" if len(sedes_distintas) > 1 and sede else label
+            for label, sede in d["grupos_dirige"]
+        ]
+
+    return sorted(por_docente.values(), key=lambda d: d["nombre_completo"])
 
 
 def obtener_o_crear_docente(db: Session, documento: str, **campos) -> models.Docente:
@@ -1381,6 +1493,898 @@ def listar_grupos_academicos(db: Session, anio_lectivo: int, periodo: int = 1) -
     return resultado
 
 
+# --- Módulo docente: mis cursos / mis estudiantes ----------------------------
+# El alcance de un docente sale de SUS PROPIAS asignaciones (AsignacionDocente),
+# nunca de lo que mande la URL/querystring — así un docente no puede ver
+# estudiantes de un grupo ajeno con solo cambiar el id en la petición.
+
+
+def mis_cursos_docente(db: Session, docente_id: int, anio_lectivo: int) -> list[schemas.CursoDocente]:
+    asignaciones = db.scalars(
+        select(models.AsignacionDocente).where(
+            models.AsignacionDocente.docente_id == docente_id,
+            models.AsignacionDocente.anio_lectivo == anio_lectivo,
+        )
+    ).all()
+    resultado = []
+    for a in asignaciones:
+        total = db.scalar(
+            select(func.count(models.Estudiante.id)).where(
+                models.Estudiante.sede_id == a.sede_id,
+                models.Estudiante.grado == a.grado,
+                (models.Estudiante.curso == a.curso) if a.curso is not None else models.Estudiante.curso.is_(None),
+                models.Estudiante.estado == "ACTIVO",
+            )
+        ) or 0
+        nombre_grado = models.GRADOS_NOMBRES.get(a.grado, str(a.grado))
+        nombre_grupo = (
+            f"{nombre_grado} - {models.DIVISIONES_NOMBRES.get(a.curso, a.curso)}" if a.curso else nombre_grado
+        )
+        resultado.append(
+            schemas.CursoDocente(
+                sede_id=a.sede_id, sede_nombre=a.sede.nombre,
+                grado=a.grado, nombre_grado=nombre_grado,
+                curso=a.curso, nombre_grupo=nombre_grupo,
+                area_id=a.area_id, area_nombre=a.area.nombre if a.area else "Director de grupo",
+                total_estudiantes=total,
+            )
+        )
+    resultado.sort(key=lambda c: (c.sede_nombre, c.grado, c.curso or 0, c.area_nombre))
+    return resultado
+
+
+def docente_tiene_acceso_grupo(
+    db: Session, docente_id: int, sede_id: int, grado: int, curso: int | None, anio_lectivo: int
+) -> bool:
+    """True si el docente tiene alguna asignación (de área, o de todo el
+    grupo) sobre ese grupo este año. Es la comprobación de seguridad real:
+    el frontend nunca decide esto, solo lo refleja."""
+    existe = db.scalar(
+        select(models.AsignacionDocente.id).where(
+            models.AsignacionDocente.docente_id == docente_id,
+            models.AsignacionDocente.sede_id == sede_id,
+            models.AsignacionDocente.grado == grado,
+            (models.AsignacionDocente.curso == curso) if curso is not None else models.AsignacionDocente.curso.is_(None),
+            models.AsignacionDocente.anio_lectivo == anio_lectivo,
+        )
+    )
+    return existe is not None
+
+
+def docente_es_director_del_grupo(
+    db: Session, docente_id: int, sede_id: int, grado: int, curso: int | None, anio_lectivo: int
+) -> bool:
+    """True solo si la asignación del docente sobre ese grupo es de TODO el
+    grupo (area_id NULL: director de grupo, o maestro único de sede rural).
+    Decisión del colegio (22/09/2026): la ficha/perfil completo del
+    estudiante la ve el director de grupo, no cualquier profesor de área que
+    también le dicte una materia — ellos siguen viendo el listado del grupo
+    para pasar asistencia, pero no el detalle del estudiante."""
+    existe = db.scalar(
+        select(models.AsignacionDocente.id).where(
+            models.AsignacionDocente.docente_id == docente_id,
+            models.AsignacionDocente.sede_id == sede_id,
+            models.AsignacionDocente.grado == grado,
+            (models.AsignacionDocente.curso == curso) if curso is not None else models.AsignacionDocente.curso.is_(None),
+            models.AsignacionDocente.anio_lectivo == anio_lectivo,
+            models.AsignacionDocente.area_id.is_(None),
+        )
+    )
+    return existe is not None
+
+
+def estudiantes_de_grupo_docente(
+    db: Session, sede_id: int, grado: int, curso: int | None
+) -> list[models.Estudiante]:
+    return listar_estudiantes(db, sede_id=sede_id, grado=grado, curso=curso, estado="ACTIVO")
+
+
+def estudiante_a_perfil_docente(e: models.Estudiante) -> schemas.EstudianteDocentePerfil:
+    nombre_grado = models.GRADOS_NOMBRES.get(e.grado, str(e.grado))
+    return schemas.EstudianteDocentePerfil(
+        id=e.id, documento=e.documento, nombre_completo=e.nombre_completo,
+        genero=e.genero, fecha_nacimiento=e.fecha_nacimiento,
+        grado=e.grado, nombre_grado=nombre_grado, curso=e.curso, nombre_grupo=e.grupo,
+        sede_id=e.sede_id, sede_nombre=e.sede.nombre if e.sede else "", estado=e.estado,
+    )
+
+
+DIAS_ASISTENCIA_DOCENTE = 30
+
+
+def _resumen_asistencia(
+    db: Session, estudiante_ids: list[int], area_id: int | None, solo_area: bool
+) -> dict[int, schemas.AsistenciaResumen]:
+    """Ausencias/tardanzas/excusas de los últimos 30 días por estudiante. Un
+    profesor de área ve solo las de SUS clases (solo_area); el director de
+    grupo, todas."""
+    desde = fechas.hoy_colombia() - dt.timedelta(days=DIAS_ASISTENCIA_DOCENTE)
+    stmt = (
+        select(models.Asistencia.estudiante_id, models.Asistencia.estado, func.count())
+        .where(
+            models.Asistencia.estudiante_id.in_(estudiante_ids),
+            models.Asistencia.fecha >= desde,
+            models.Asistencia.anulado.is_(False),
+            models.Asistencia.estado.in_(("ausente", "tardanza", "excusa")),
+        )
+        .group_by(models.Asistencia.estudiante_id, models.Asistencia.estado)
+    )
+    if solo_area:
+        stmt = stmt.where(models.Asistencia.area_id == area_id)
+    conteo: dict[int, dict[str, int]] = {}
+    for est_id, estado, n in db.execute(stmt) if estudiante_ids else []:
+        conteo.setdefault(est_id, {})[estado] = n
+    return {
+        i: schemas.AsistenciaResumen(
+            dias=DIAS_ASISTENCIA_DOCENTE, ausencias=conteo.get(i, {}).get("ausente", 0),
+            tardanzas=conteo.get(i, {}).get("tardanza", 0), excusas=conteo.get(i, {}).get("excusa", 0),
+        )
+        for i in estudiante_ids
+    }
+
+
+def seguimiento_grupo_docente(
+    db: Session, docente_id: int, sede_id: int, grado: int, curso: int | None, area_id: int | None, anio: int
+) -> schemas.SeguimientoGrupoDocente:
+    """"Mis estudiantes" con cómo van: el profesor de área ve sus notas en SU
+    materia y las faltas en SUS clases; el director de grupo ve además las
+    materias que cada uno va perdiendo (todas) y con quién. El área solo se
+    acepta si el docente de verdad la dicta en ese grupo — nunca por lo que
+    diga la URL."""
+    from . import reporte_notas
+
+    es_director = docente_es_director_del_grupo(db, docente_id, sede_id, grado, curso, anio)
+    area = None
+    if area_id is not None:
+        dicta = db.scalar(
+            select(models.AsignacionDocente.id).where(
+                models.AsignacionDocente.docente_id == docente_id,
+                models.AsignacionDocente.sede_id == sede_id,
+                models.AsignacionDocente.grado == grado,
+                (models.AsignacionDocente.curso == curso) if curso is not None else models.AsignacionDocente.curso.is_(None),
+                models.AsignacionDocente.area_id == area_id,
+                models.AsignacionDocente.anio_lectivo == anio,
+            )
+        )
+        area = db.get(models.Area, area_id) if dicta else None
+
+    estudiantes = estudiantes_de_grupo_docente(db, sede_id, grado, curso)
+    ids = [e.id for e in estudiantes]
+    notas, periodos = reporte_notas.rendimiento_de_estudiantes(db, ids, anio)
+    docentes = reporte_notas.docentes_por_area(db, sede_id, grado, curso, anio) if es_director else {}
+    asistencia = _resumen_asistencia(db, ids, area.id if area else None, solo_area=area is not None and not es_director)
+    nota_minima = 3.0
+
+    filas = []
+    for e in estudiantes:
+        suyas = notas.get(e.id, {})
+        fila = schemas.EstudianteSeguimientoDocente(
+            id=e.id, documento=e.documento, nombre_completo=e.nombre_completo, genero=e.genero,
+            asistencia=asistencia[e.id],
+        )
+        if area is not None and area.id in suyas:
+            por_periodo = suyas[area.id]["por_periodo"]
+            promedio = sum(por_periodo.values()) / len(por_periodo)
+            fila.notas_area = [schemas.NotaPorPeriodo(periodo=p, valor=v) for p, v in sorted(por_periodo.items())]
+            fila.promedio_area = round(promedio, 2)
+            fila.estado_area = reporte_notas.estado_materia(promedio, nota_minima)
+        if es_director:
+            materias = reporte_notas.materias_desde_notas(suyas, nota_minima, docentes)
+            fila.materias_perdidas = [m for m in materias if m.estado == "perdida"]
+            fila.materias_en_riesgo = sum(1 for m in materias if m.estado == "en_riesgo")
+        filas.append(fila)
+    return schemas.SeguimientoGrupoDocente(
+        es_director=es_director, area_id=area.id if area else None, area_nombre=area.nombre if area else None,
+        anio_lectivo=anio, nota_minima=nota_minima, periodos=periodos, estudiantes=filas,
+    )
+
+
+def rendimiento_estudiante_docente(db: Session, e: models.Estudiante, anio: int) -> schemas.RendimientoEstudianteDocente:
+    from . import reporte_notas
+
+    desde = fechas.hoy_colombia() - dt.timedelta(days=DIAS_ASISTENCIA_DOCENTE)
+    faltas = db.execute(
+        select(models.Asistencia.fecha, models.Asistencia.estado, models.Area.nombre)
+        .outerjoin(models.Area, models.Asistencia.area_id == models.Area.id)
+        .where(
+            models.Asistencia.estudiante_id == e.id, models.Asistencia.fecha >= desde,
+            models.Asistencia.anulado.is_(False), models.Asistencia.estado.in_(("ausente", "tardanza", "excusa")),
+        )
+        .order_by(models.Asistencia.fecha.desc())
+        .limit(15)
+    ).all()
+    return schemas.RendimientoEstudianteDocente(
+        riesgo=reporte_notas.riesgo_promocion(db, e.id, anio),
+        asistencia=_resumen_asistencia(db, [e.id], None, solo_area=False)[e.id],
+        ultimas_faltas=[{"fecha": f.isoformat(), "estado": est, "area": area} for f, est, area in faltas],
+    )
+
+
+def estudiante_si_docente_tiene_acceso(
+    db: Session, docente_id: int, estudiante_id: int, anio_lectivo: int
+) -> models.Estudiante | None:
+    """Para lo que SÍ puede hacer cualquier docente asignado al grupo (no
+    solo el director): observaciones, asistencia. None si el estudiante no
+    existe o no está en ningún grupo del docente — mismo criterio de 404
+    "silencioso" que perfil_estudiante_para_docente."""
+    e = obtener_estudiante(db, estudiante_id)
+    if e is None or e.sede_id is None:
+        return None
+    if not docente_tiene_acceso_grupo(db, docente_id, e.sede_id, e.grado, e.curso, anio_lectivo):
+        return None
+    return e
+
+
+def perfil_estudiante_para_docente(
+    db: Session, docente_id: int, estudiante_id: int, anio_lectivo: int
+) -> schemas.EstudianteDocentePerfil | None:
+    """None si el estudiante no existe, si no está en ningún grupo del
+    docente, O si el docente le dicta una materia pero NO es el director de
+    ese grupo (ver docente_es_director_del_grupo) — en los tres casos se
+    responde igual a propósito, para no revelar por el código de error si el
+    id de estudiante existe o a qué grupo pertenece."""
+    e = obtener_estudiante(db, estudiante_id)
+    if e is None or e.sede_id is None:
+        return None
+    if not docente_es_director_del_grupo(db, docente_id, e.sede_id, e.grado, e.curso, anio_lectivo):
+        return None
+    return estudiante_a_perfil_docente(e)
+
+
+def estudiante_completo_si_es_director(
+    db: Session, docente_id: int, estudiante_id: int, anio_lectivo: int
+) -> models.Estudiante | None:
+    """Igual criterio que perfil_estudiante_para_docente (None si no existe,
+    no es su grupo, o le dicta un área pero no es el director), pero devuelve
+    el modelo COMPLETO (mismo que usa el módulo administrativo en
+    obtener_estudiante) para que el director de grupo pueda abrir la ficha de
+    matrícula oficial completa — no solo el perfil acotado."""
+    e = obtener_estudiante(db, estudiante_id)
+    if e is None or e.sede_id is None:
+        return None
+    if not docente_es_director_del_grupo(db, docente_id, e.sede_id, e.grado, e.curso, anio_lectivo):
+        return None
+    return e
+
+
+# --- Observaciones (académica/convivencia/general/remisión a psicología) ----
+# confidencial se decide SIEMPRE aquí (tipo=="psicologia" => True), nunca se
+# confía en lo que mande el cliente. Los seguimientos (SeguimientoObservacion)
+# solo se incluyen en la salida para quien tiene ver_confidenciales o
+# seguimientos.gestionar — es lo que separa "el docente remite" de
+# "psicología gestiona el caso" (punto 11 del encargo docente).
+
+
+def crear_observacion(
+    db: Session, estudiante: models.Estudiante, autor_usuario_id: int, datos: schemas.ObservacionCrear
+) -> models.Observacion:
+    if datos.uuid_cliente:
+        existente = db.scalar(
+            select(models.Observacion).where(models.Observacion.uuid_cliente == datos.uuid_cliente)
+        )
+        if existente is not None:
+            return existente
+    o = models.Observacion(
+        uuid_cliente=datos.uuid_cliente, estudiante_id=estudiante.id,
+        sede_id=estudiante.sede_id, grado=estudiante.grado, curso=estudiante.curso,
+        tipo=datos.tipo, confidencial=(datos.tipo == "psicologia"),
+        titulo=(datos.titulo or None), detalle=datos.detalle,
+        autor_usuario_id=autor_usuario_id, fecha=datos.fecha or fechas.hoy_colombia(),
+    )
+    db.add(o)
+    db.commit()
+    db.refresh(o)
+    return o
+
+
+def listar_observaciones_estudiante(
+    db: Session, estudiante_id: int, *, usuario_id: int, ve_confidenciales: bool
+) -> list[models.Observacion]:
+    stmt = select(models.Observacion).where(models.Observacion.estudiante_id == estudiante_id)
+    if not ve_confidenciales:
+        # Lo confidencial se oculta, salvo lo que el propio usuario escribió
+        # (el autor de una remisión sigue viendo su propio texto original).
+        stmt = stmt.where(
+            models.Observacion.confidencial.is_(False) | (models.Observacion.autor_usuario_id == usuario_id)
+        )
+    stmt = stmt.order_by(models.Observacion.creado_en.desc())
+    return list(db.scalars(stmt).all())
+
+
+def agregar_seguimiento(db: Session, observacion_id: int, autor_usuario_id: int, nota: str) -> models.SeguimientoObservacion:
+    s = models.SeguimientoObservacion(observacion_id=observacion_id, autor_usuario_id=autor_usuario_id, nota=nota)
+    db.add(s)
+    db.commit()
+    db.refresh(s)
+    return s
+
+
+def cambiar_estado_observacion(
+    db: Session, observacion_id: int, usuario_id: int, datos: schemas.ObservacionEstado
+) -> models.Observacion | None:
+    o = db.get(models.Observacion, observacion_id)
+    if o is None:
+        return None
+    o.estado = datos.estado
+    if datos.estado in ("atendida", "cerrada"):
+        o.atendida_por_usuario_id = usuario_id
+        o.atendida_en = fechas.ahora_utc()
+    if datos.nota_atencion is not None:
+        o.nota_atencion = datos.nota_atencion
+    db.commit()
+    db.refresh(o)
+    return o
+
+
+def observacion_a_vista(o: models.Observacion, *, incluir_seguimientos: bool) -> schemas.ObservacionVista:
+    return schemas.ObservacionVista(
+        id=o.id, estudiante_id=o.estudiante_id,
+        estudiante_nombre=o.estudiante.nombre_completo, estudiante_documento=o.estudiante.documento,
+        nombre_grupo=o.estudiante.grupo,
+        tipo=o.tipo, confidencial=o.confidencial, titulo=o.titulo, detalle=o.detalle,
+        autor_nombre=o.autor.nombre if o.autor else "", fecha=o.fecha, creado_en=o.creado_en, estado=o.estado,
+        atendida_por_nombre=o.atendida_por.nombre if o.atendida_por else None,
+        atendida_en=o.atendida_en, nota_atencion=o.nota_atencion,
+        seguimientos=(
+            [
+                schemas.SeguimientoVista(id=s.id, autor_nombre=s.autor.nombre, nota=s.nota, creado_en=s.creado_en)
+                for s in o.seguimientos
+            ]
+            if incluir_seguimientos
+            else []
+        ),
+    )
+
+
+# --- Diagnóstico de orientación/psicología (Excel por grado) ---------------
+
+
+def _grado_nombre(grado: int, curso: int | None) -> str:
+    nombre = models.GRADOS_NOMBRES.get(grado, str(grado))
+    if not curso:
+        return nombre
+    division = models.DIVISIONES_NOMBRES.get(curso, str(curso))
+    return f"{nombre} - {division}"
+
+
+def periodo_de_fecha(fecha: dt.date | None) -> str | None:
+    """'Marzo 2026' a partir de la fecha real del diagnóstico. None si no se
+    pudo determinar la fecha — nunca se inventa un período."""
+    if fecha is None:
+        return None
+    return f"{MESES_TEXTO[fecha.month].capitalize()} {fecha.year}"
+
+
+def _contar_estudiantes_mencionados(menciones: list[models.DiagnosticoMencion]) -> int:
+    """Personas DISTINTAS detrás de una lista de menciones — un mismo
+    estudiante puede tener varias situaciones y cuenta una sola vez. Mismo
+    criterio de agrupación que usa el frontend (orGruposSituaciones)."""
+    claves = {
+        f"e{m.estudiante_id}" if m.estudiante_id else f"n{(m.nombre_detectado or m.texto or '').strip().lower()}"
+        for m in menciones
+    }
+    return len(claves)
+
+
+def mencion_a_vista(db: Session, m: models.DiagnosticoMencion) -> schemas.DiagnosticoMencionVista:
+    candidatos = []
+    if m.candidatos_json:
+        ids = json.loads(m.candidatos_json)
+        estudiantes = db.scalars(select(models.Estudiante).where(models.Estudiante.id.in_(ids))) if ids else []
+        por_id = {e.id: e for e in estudiantes}
+        candidatos = [
+            schemas.CandidatoVinculo(id=eid, nombre_completo=por_id[eid].nombre_completo)
+            for eid in ids if eid in por_id
+        ]
+    caso_id = db.scalar(select(models.Caso.id).where(models.Caso.mencion_origen_id == m.id))
+    return schemas.DiagnosticoMencionVista(
+        id=m.id, categoria=m.categoria, texto=m.texto, nombre_detectado=m.nombre_detectado,
+        estudiante_id=m.estudiante_id,
+        estudiante_nombre=m.estudiante.nombre_completo if m.estudiante else None,
+        estudiante_documento=m.estudiante.documento if m.estudiante else None,
+        vinculo_automatico=m.vinculo_automatico,
+        confianza=m.confianza, texto_compartido=m.texto_compartido, candidatos=candidatos,
+        caso_id=caso_id,
+    )
+
+
+def diagnostico_a_resumen(
+    db: Session, d: models.DiagnosticoGrado, *, es_version_actual: bool
+) -> schemas.DiagnosticoGradoResumen:
+    pendientes = sum(1 for m in d.menciones if m.estudiante_id is None)
+    casos = listar_casos_grupo(db, d.sede_id, d.grado, d.curso)
+    hoy = fechas.hoy_colombia()
+    return schemas.DiagnosticoGradoResumen(
+        id=d.id, sede_id=d.sede_id, grado=d.grado, curso=d.curso, grado_nombre=_grado_nombre(d.grado, d.curso),
+        hoja_excel=d.hoja_excel, fecha_diligenciado=d.fecha_diligenciado, periodo=periodo_de_fecha(d.fecha_diligenciado),
+        importado_en=d.importado_en,
+        n_en_lista=d.n_en_lista, n_asisten=d.n_asisten,
+        total_menciones=len(d.menciones), estudiantes_mencionados=_contar_estudiantes_mencionados(d.menciones),
+        menciones_pendientes=pendientes,
+        casos_abiertos=sum(1 for c in casos if c.estado == "abierto"),
+        casos_en_seguimiento=sum(1 for c in casos if c.estado == "en_seguimiento"),
+        seguimientos_pendientes=sum(
+            1 for c in casos if c.estado != "cerrado" and c.proximo_seguimiento and c.proximo_seguimiento <= hoy
+        ),
+        es_version_actual=es_version_actual,
+    )
+
+
+def listar_diagnosticos_actuales(db: Session, sede_id: int | None = None) -> list[schemas.DiagnosticoGradoResumen]:
+    """La última versión de cada grado (por sede+grado+curso), la que ve
+    orientación al entrar. Las versiones anteriores quedan disponibles como
+    historial dentro del detalle de cada una."""
+    stmt = select(models.DiagnosticoGrado).order_by(models.DiagnosticoGrado.importado_en.desc())
+    if sede_id is not None:
+        stmt = stmt.where(models.DiagnosticoGrado.sede_id == sede_id)
+    todos = db.scalars(stmt).all()
+    vistos: set[tuple[int, int, int | None]] = set()
+    actuales: list[schemas.DiagnosticoGradoResumen] = []
+    for d in todos:
+        clave = (d.sede_id, d.grado, d.curso)
+        if clave in vistos:
+            continue
+        vistos.add(clave)
+        actuales.append(diagnostico_a_resumen(db, d, es_version_actual=True))
+    actuales.sort(key=lambda r: (r.grado, r.curso or 0))
+    return actuales
+
+
+def diagnostico_a_detalle(db: Session, d: models.DiagnosticoGrado) -> schemas.DiagnosticoGradoDetalle:
+    otras_versiones = db.scalars(
+        select(models.DiagnosticoGrado)
+        .where(
+            models.DiagnosticoGrado.sede_id == d.sede_id,
+            models.DiagnosticoGrado.grado == d.grado,
+            models.DiagnosticoGrado.curso == d.curso,
+        )
+        .order_by(models.DiagnosticoGrado.importado_en.desc())
+    ).all()
+    es_actual = otras_versiones[0].id == d.id if otras_versiones else True
+    historial = [diagnostico_a_resumen(db, v, es_version_actual=(v.id == otras_versiones[0].id)) for v in otras_versiones]
+
+    resumen = diagnostico_a_resumen(db, d, es_version_actual=es_actual)
+    return schemas.DiagnosticoGradoDetalle(
+        **resumen.model_dump(),
+        no_asisten_texto=d.no_asisten_texto, desplazados_texto=d.desplazados_texto,
+        embarazadas_texto=d.embarazadas_texto, victimas_conflicto_texto=d.victimas_conflicto_texto,
+        dificultades_academicas=d.dificultades_academicas, dificultades_comportamiento=d.dificultades_comportamiento,
+        acompanamiento_padres=d.acompanamiento_padres, problemas_salud=d.problemas_salud,
+        tematicas_trabajar=d.tematicas_trabajar, estrategias_conflicto=d.estrategias_conflicto,
+        estrategias_aprendizaje=d.estrategias_aprendizaje, resguardos_atendidos=d.resguardos_atendidos,
+        recomendaciones_docentes=d.recomendaciones_docentes, llamados_atencion=d.llamados_atencion,
+        orientacion_brindada=d.orientacion_brindada, transporte_escolar=d.transporte_escolar,
+        observaciones_generales=d.observaciones_generales, director_grado_nombre=d.director_grado_nombre,
+        orientador_escolar_nombre=d.orientador_escolar_nombre, seguimiento_nota=d.seguimiento_nota,
+        texto_crudo=d.texto_crudo,
+        menciones=[mencion_a_vista(db, m) for m in d.menciones],
+        historial=historial,
+        casos=[caso_a_vista(c) for c in listar_casos_grupo(db, d.sede_id, d.grado, d.curso)],
+    )
+
+
+def listar_menciones_estudiante(db: Session, estudiante_id: int) -> list[schemas.DiagnosticoEstudianteMencion]:
+    menciones = db.scalars(
+        select(models.DiagnosticoMencion)
+        .join(models.DiagnosticoGrado)
+        .where(models.DiagnosticoMencion.estudiante_id == estudiante_id)
+        .order_by(models.DiagnosticoGrado.importado_en.desc())
+    ).all()
+    resultado = []
+    for m in menciones:
+        d = m.diagnostico
+        base = mencion_a_vista(db, m)
+        resultado.append(
+            schemas.DiagnosticoEstudianteMencion(
+                **base.model_dump(), diagnostico_id=d.id, grado=d.grado, curso=d.curso,
+                grado_nombre=_grado_nombre(d.grado, d.curso),
+                fecha_diligenciado=d.fecha_diligenciado, periodo=periodo_de_fecha(d.fecha_diligenciado),
+                importado_en=d.importado_en,
+            )
+        )
+    return resultado
+
+
+def resumen_estudiante_diagnostico(db: Session, estudiante_id: int) -> schemas.DiagnosticoEstudianteResumen:
+    e = db.get(models.Estudiante, estudiante_id)
+    basico = None
+    if e is not None:
+        basico = schemas.EstudianteBasicoOrientacion(
+            id=e.id, documento=e.documento, tipo_documento=e.tipo_documento, nombre_completo=e.nombre_completo,
+            genero=e.genero, fecha_nacimiento=e.fecha_nacimiento, estado=e.estado, retirado=e.retirado,
+            grado=e.grado, curso=e.curso, grupo=e.grupo, sede_id=e.sede_id,
+            sede_nombre=e.sede.nombre if e.sede else None,
+        )
+    return schemas.DiagnosticoEstudianteResumen(
+        menciones=listar_menciones_estudiante(db, estudiante_id),
+        casos=[caso_a_vista(c) for c in listar_casos_estudiante(db, estudiante_id)],
+        estudiante=basico,
+    )
+
+
+def vincular_mencion(
+    db: Session, mencion_id: int, estudiante_id: int | None, usuario_id: int
+) -> models.DiagnosticoMencion | None:
+    m = db.get(models.DiagnosticoMencion, mencion_id)
+    if m is None:
+        return None
+    m.estudiante_id = estudiante_id
+    m.vinculo_automatico = False
+    m.vinculado_por_usuario_id = usuario_id
+    m.vinculado_en = fechas.ahora_utc()
+    db.commit()
+    db.refresh(m)
+    return m
+
+
+# --- Casos de orientación (trabajo activo sobre un estudiante) -------------
+# Nace de "Abrir caso" desde una mención del Excel, o creado a mano. Un caso
+# acumula CasoSeguimiento (ver más abajo) — nunca se crea un caso nuevo por
+# cada seguimiento, se agrega al historial del mismo caso.
+
+CASO_TIPOS = {
+    "academica", "comportamiento", "inasistencia", "intermitencia",
+    "familiar", "salud", "convivencia", "orientacion", "riesgo", "otra",
+}
+CASO_ESTADOS = {"abierto", "en_seguimiento", "cerrado"}
+
+# Categoría detectada en el Excel -> tipo de caso sugerido al "Abrir caso"
+# (la orientadora la ve y puede cambiarla antes de guardar; nunca se asigna
+# a ciegas sin que ella confirme el formulario).
+CATEGORIA_A_TIPO_CASO = {
+    "no_asiste": "inasistencia", "intermitencia": "intermitencia",
+    "desplazado": "riesgo", "embarazada": "salud", "victima_conflicto": "riesgo",
+    "dificultad_academica": "academica", "dificultad_comportamiento": "comportamiento",
+    "llamado_atencion": "comportamiento", "salud": "salud",
+}
+
+
+def caso_a_vista(c: models.Caso) -> schemas.CasoVista:
+    return schemas.CasoVista(
+        id=c.id, estudiante_id=c.estudiante_id, estudiante_nombre=c.estudiante.nombre_completo,
+        estudiante_documento=c.estudiante.documento, grado_nombre=_grado_nombre(c.grado, c.curso),
+        tipo=c.tipo, titulo=c.titulo, estado=c.estado, fecha_apertura=c.fecha_apertura,
+        proximo_seguimiento=c.proximo_seguimiento, origen=c.origen,
+        autor_nombre=c.autor.nombre if c.autor else "", creado_en=c.creado_en,
+        total_seguimientos=len(c.seguimientos),
+    )
+
+
+def seguimiento_caso_a_vista(s: models.CasoSeguimiento) -> schemas.CasoSeguimientoVista:
+    return schemas.CasoSeguimientoVista(
+        id=s.id, fecha=s.fecha, tipo_atencion=s.tipo_atencion, situacion=s.situacion,
+        accion_realizada=s.accion_realizada, compromisos=s.compromisos, observaciones=s.observaciones,
+        proxima_fecha=s.proxima_fecha, autor_nombre=s.autor.nombre if s.autor else "", creado_en=s.creado_en,
+    )
+
+
+def caso_a_detalle(c: models.Caso) -> schemas.CasoDetalle:
+    base = caso_a_vista(c)
+    return schemas.CasoDetalle(
+        **base.model_dump(), sede_id=c.sede_id, grado=c.grado, curso=c.curso,
+        descripcion=c.descripcion, acciones=c.acciones, observaciones=c.observaciones,
+        cerrado_en=c.cerrado_en, cerrado_por_nombre=c.cerrado_por.nombre if c.cerrado_por else None,
+        mencion_origen_id=c.mencion_origen_id,
+        seguimientos=[seguimiento_caso_a_vista(s) for s in c.seguimientos],
+    )
+
+
+def listar_casos_grupo(db: Session, sede_id: int, grado: int, curso: int | None) -> list[models.Caso]:
+    """Casos del grupo de un diagnóstico. Si el diagnóstico no distingue
+    sección (curso=None — pasa con Preescolar: el Excel trae una sola hoja
+    combinada aunque la matrícula real tenga dos secciones), se muestran los
+    casos de TODO el grado sin filtrar por curso — igual que ya hace
+    vincular_estudiante() al buscar candidatos, para no dejar casos reales
+    invisibles solo porque el Excel es menos granular que la matrícula."""
+    stmt = select(models.Caso).where(models.Caso.sede_id == sede_id, models.Caso.grado == grado)
+    if curso is not None:
+        stmt = stmt.where(models.Caso.curso == curso)
+    return list(db.scalars(stmt.order_by(models.Caso.creado_en.desc())))
+
+
+def listar_casos_estudiante(db: Session, estudiante_id: int) -> list[models.Caso]:
+    return list(
+        db.scalars(
+            select(models.Caso).where(models.Caso.estudiante_id == estudiante_id).order_by(models.Caso.creado_en.desc())
+        )
+    )
+
+
+def crear_caso(db: Session, datos: schemas.CasoCrear, autor_usuario_id: int) -> models.Caso:
+    estudiante = db.get(models.Estudiante, datos.estudiante_id)
+    c = models.Caso(
+        sede_id=estudiante.sede_id, grado=estudiante.grado, curso=estudiante.curso,
+        estudiante_id=datos.estudiante_id, tipo=datos.tipo, titulo=(datos.titulo or None),
+        descripcion=datos.descripcion, acciones=(datos.acciones or None),
+        observaciones=(datos.observaciones or None),
+        fecha_apertura=datos.fecha_apertura or fechas.hoy_colombia(),
+        proximo_seguimiento=datos.proximo_seguimiento,
+        origen="importado" if datos.mencion_origen_id else "manual",
+        mencion_origen_id=datos.mencion_origen_id, autor_usuario_id=autor_usuario_id,
+    )
+    db.add(c)
+    db.commit()
+    db.refresh(c)
+    return c
+
+
+def cambiar_estado_caso(db: Session, caso_id: int, estado: str, usuario_id: int) -> models.Caso | None:
+    c = db.get(models.Caso, caso_id)
+    if c is None:
+        return None
+    c.estado = estado
+    if estado == "cerrado":
+        c.cerrado_en = fechas.ahora_utc()
+        c.cerrado_por_usuario_id = usuario_id
+    else:
+        c.cerrado_en = None
+        c.cerrado_por_usuario_id = None
+    db.commit()
+    db.refresh(c)
+    return c
+
+
+def agregar_seguimiento_caso(
+    db: Session, caso_id: int, datos: schemas.CasoSeguimientoCrear, autor_usuario_id: int
+) -> models.Caso | None:
+    c = db.get(models.Caso, caso_id)
+    if c is None:
+        return None
+    s = models.CasoSeguimiento(
+        caso_id=caso_id, fecha=datos.fecha or fechas.hoy_colombia(),
+        tipo_atencion=(datos.tipo_atencion or None), situacion=datos.situacion,
+        accion_realizada=(datos.accion_realizada or None), compromisos=(datos.compromisos or None),
+        observaciones=(datos.observaciones or None), proxima_fecha=datos.proxima_fecha,
+        autor_usuario_id=autor_usuario_id,
+    )
+    db.add(s)
+    # Un seguimiento nuevo indica que el caso ya no está "recién abierto"
+    # (salvo que ya estuviera cerrado, eso lo decide un cambio de estado
+    # explícito, no un seguimiento) y actualiza cuándo toca el próximo.
+    if c.estado != "cerrado":
+        c.estado = "en_seguimiento"
+    c.proximo_seguimiento = datos.proxima_fecha
+    db.commit()
+    db.refresh(c)
+    return c
+
+
+def listar_casos_filtrados(
+    db: Session, *, sede_id: int | None = None, grado: int | None = None, curso: int | None = None,
+    estado: str | None = None, tipo: str | None = None, estudiante_id: int | None = None,
+) -> list[models.Caso]:
+    stmt = select(models.Caso).order_by(models.Caso.creado_en.desc())
+    if sede_id is not None:
+        stmt = stmt.where(models.Caso.sede_id == sede_id)
+    if grado is not None:
+        stmt = stmt.where(models.Caso.grado == grado)
+    if curso is not None:
+        stmt = stmt.where(models.Caso.curso == curso)
+    if estado is not None:
+        stmt = stmt.where(models.Caso.estado == estado)
+    if tipo is not None:
+        stmt = stmt.where(models.Caso.tipo == tipo)
+    if estudiante_id is not None:
+        stmt = stmt.where(models.Caso.estudiante_id == estudiante_id)
+    return list(db.scalars(stmt))
+
+
+def resumen_orientacion(db: Session, sede_id: int | None = None) -> schemas.OrientacionResumen:
+    stmt = select(models.Caso)
+    if sede_id is not None:
+        stmt = stmt.where(models.Caso.sede_id == sede_id)
+    casos = list(db.scalars(stmt))
+    hoy = fechas.hoy_colombia()
+    return schemas.OrientacionResumen(
+        diagnosticos=len(listar_diagnosticos_actuales(db, sede_id=sede_id)),
+        casos_abiertos=sum(1 for c in casos if c.estado == "abierto"),
+        casos_en_seguimiento=sum(1 for c in casos if c.estado == "en_seguimiento"),
+        seguimientos_pendientes=sum(
+            1 for c in casos if c.estado != "cerrado" and c.proximo_seguimiento and c.proximo_seguimiento <= hoy
+        ),
+    )
+
+
+# --- Grupos de orientación (matrícula real + diagnóstico vigente) ----------
+# La lista "por grado" sale de la MATRÍCULA, no solo de las hojas del Excel:
+# un grupo sin hoja (ej. 6-6) igual se tiene que poder trabajar. Cuando el
+# Excel trae una sola hoja para todo el grado (curso=None, pasa con
+# Preescolar), las secciones de ese grado se juntan en una sola fila —
+# mismo criterio que listar_casos_grupo() y vincular_estudiante().
+
+
+def _diagnosticos_vigentes(db: Session, sede_id: int) -> dict[tuple[int, int | None], models.DiagnosticoGrado]:
+    vigentes: dict[tuple[int, int | None], models.DiagnosticoGrado] = {}
+    stmt = (
+        select(models.DiagnosticoGrado)
+        .where(models.DiagnosticoGrado.sede_id == sede_id)
+        .order_by(models.DiagnosticoGrado.importado_en.desc())
+    )
+    for d in db.scalars(stmt):
+        vigentes.setdefault((d.grado, d.curso), d)
+    return vigentes
+
+
+def _grados_completos(vigentes: dict[tuple[int, int | None], models.DiagnosticoGrado]) -> set[int]:
+    """Grados cuyo diagnóstico es UNA sola hoja para todo el grado (y no hay
+    hojas por sección que lo contradigan)."""
+    con_hoja_general = {g for (g, c) in vigentes if c is None}
+    con_hoja_por_seccion = {g for (g, c) in vigentes if c is not None}
+    return con_hoja_general - con_hoja_por_seccion
+
+
+def _clave_grupo(grado: int, curso: int | None, completos: set[int]) -> tuple[int, int | None]:
+    return (grado, None) if grado in completos else (grado, curso)
+
+
+def _resumen_grupo(
+    sede_id: int, clave: tuple[int, int | None], completos: set[int], n_estudiantes: int,
+    diag: models.DiagnosticoGrado | None, casos: list[models.Caso], hoy: dt.date,
+) -> dict:
+    grado, curso = clave
+    menciones = diag.menciones if diag else []
+    nombre = _grado_nombre(grado, curso)
+    if curso is None and grado not in completos:
+        nombre += " (sin curso asignado)"
+    return dict(
+        sede_id=sede_id, grado=grado, curso=curso, grado_nombre=nombre,
+        grado_completo=grado in completos, n_estudiantes=n_estudiantes,
+        diagnostico_id=diag.id if diag else None,
+        periodo=periodo_de_fecha(diag.fecha_diligenciado) if diag else None,
+        fecha_diligenciado=diag.fecha_diligenciado if diag else None,
+        estudiantes_mencionados=_contar_estudiantes_mencionados(menciones),
+        menciones_pendientes=sum(1 for m in menciones if m.estudiante_id is None),
+        casos_abiertos=sum(1 for c in casos if c.estado == "abierto"),
+        casos_en_seguimiento=sum(1 for c in casos if c.estado == "en_seguimiento"),
+        seguimientos_vencidos=sum(
+            1 for c in casos if c.estado != "cerrado" and c.proximo_seguimiento and c.proximo_seguimiento <= hoy
+        ),
+    )
+
+
+def listar_grupos_orientacion(db: Session, sede_id: int) -> list[schemas.GrupoOrientacion]:
+    vigentes = _diagnosticos_vigentes(db, sede_id)
+    completos = _grados_completos(vigentes)
+
+    conteos: dict[tuple[int, int | None], int] = {}
+    filas = db.execute(
+        select(models.Estudiante.grado, models.Estudiante.curso, func.count())
+        .where(models.Estudiante.sede_id == sede_id, models.Estudiante.estado == "ACTIVO")
+        .group_by(models.Estudiante.grado, models.Estudiante.curso)
+    ).all()
+    for grado, curso, n in filas:
+        clave = _clave_grupo(grado, curso, completos)
+        conteos[clave] = conteos.get(clave, 0) + n
+    for clave in vigentes:
+        conteos.setdefault(clave, 0)
+
+    casos_por_grupo: dict[tuple[int, int | None], list[models.Caso]] = {}
+    for c in db.scalars(select(models.Caso).where(models.Caso.sede_id == sede_id)):
+        clave = _clave_grupo(c.grado, c.curso, completos)
+        casos_por_grupo.setdefault(clave, []).append(c)
+        conteos.setdefault(clave, 0)
+
+    hoy = fechas.hoy_colombia()
+    grupos = [
+        schemas.GrupoOrientacion(
+            **_resumen_grupo(sede_id, clave, completos, n, vigentes.get(clave), casos_por_grupo.get(clave, []), hoy)
+        )
+        for clave, n in conteos.items()
+    ]
+    # Sin curso al final de su grado (son estudiantes pendientes de ubicar).
+    grupos.sort(key=lambda g: (g.grado, g.curso is None and not g.grado_completo, g.curso or 0))
+    return grupos
+
+
+def generales_por_grupo(db: Session, sede_id: int) -> list[schemas.GeneralesGrupo]:
+    """Temáticas, estrategias, resguardos... del diagnóstico VIGENTE de cada
+    grupo de la sede, para verlos todos juntos."""
+    resultado = [
+        schemas.GeneralesGrupo(
+            diagnostico_id=d.id, sede_id=d.sede_id, grado=d.grado, curso=d.curso,
+            grado_nombre=_grado_nombre(d.grado, d.curso), periodo=periodo_de_fecha(d.fecha_diligenciado),
+            director_grado_nombre=d.director_grado_nombre,
+            tematicas_trabajar=d.tematicas_trabajar, estrategias_conflicto=d.estrategias_conflicto,
+            estrategias_aprendizaje=d.estrategias_aprendizaje, resguardos_atendidos=d.resguardos_atendidos,
+            recomendaciones_docentes=d.recomendaciones_docentes, orientacion_brindada=d.orientacion_brindada,
+            acompanamiento_padres=d.acompanamiento_padres,
+        )
+        for d in _diagnosticos_vigentes(db, sede_id).values()
+    ]
+    resultado.sort(key=lambda g: (g.grado, g.curso or 0))
+    return resultado
+
+
+def diagnostico_vigente_de_grupo(
+    db: Session, sede_id: int, grado: int, curso: int | None
+) -> models.DiagnosticoGrado | None:
+    """El diagnóstico vigente que cubre a ese grupo (la hoja del curso, o la
+    hoja única del grado si el Excel no distingue secciones)."""
+    vigentes = _diagnosticos_vigentes(db, sede_id)
+    return vigentes.get(_clave_grupo(grado, curso, _grados_completos(vigentes)))
+
+
+def clave_persona_mencion(m: models.DiagnosticoMencion) -> str:
+    """Quién está detrás de una mención — mismo criterio que
+    _contar_estudiantes_mencionados (un estudiante vinculado, o el nombre tal
+    cual lo escribió el Excel)."""
+    return f"e{m.estudiante_id}" if m.estudiante_id else f"n{(m.nombre_detectado or m.texto or '').strip().lower()}"
+
+
+def situaciones_por_grupo(db: Session, sede_id: int) -> dict[tuple[int, int | None], dict[str, dict]]:
+    """Por grupo (misma clave que listar_grupos_orientacion) y por categoría:
+    cuántas situaciones registra el diagnóstico vigente y QUIÉNES (claves de
+    persona, para poder unir categorías sin contar dos veces a alguien) —
+    conteos directos de lo importado, nunca estimados."""
+    resultado: dict[tuple[int, int | None], dict[str, dict]] = {}
+    for clave, d in _diagnosticos_vigentes(db, sede_id).items():
+        por_categoria: dict[str, dict] = {}
+        for m in d.menciones:
+            c = por_categoria.setdefault(m.categoria, {"situaciones": 0, "personas": set()})
+            c["situaciones"] += 1
+            c["personas"].add(clave_persona_mencion(m))
+        resultado[clave] = por_categoria
+    return resultado
+
+
+def detalle_grupo_orientacion(
+    db: Session, sede_id: int, grado: int, curso: int | None
+) -> schemas.GrupoOrientacionDetalle | None:
+    sede = db.get(models.Sede, sede_id)
+    if sede is None:
+        return None
+    vigentes = _diagnosticos_vigentes(db, sede_id)
+    completos = _grados_completos(vigentes)
+    clave = _clave_grupo(grado, curso, completos)
+    diag = vigentes.get(clave)
+
+    def filtrar(stmt, col_grado, col_curso):
+        stmt = stmt.where(col_grado == grado)
+        if grado in completos:
+            return stmt
+        return stmt.where(col_curso.is_(None) if curso is None else col_curso == curso)
+
+    activos = list(db.scalars(filtrar(
+        select(models.Estudiante).where(models.Estudiante.sede_id == sede_id, models.Estudiante.estado == "ACTIVO"),
+        models.Estudiante.grado, models.Estudiante.curso,
+    )))
+    casos = list(db.scalars(filtrar(
+        select(models.Caso).where(models.Caso.sede_id == sede_id).order_by(models.Caso.creado_en.desc()),
+        models.Caso.grado, models.Caso.curso,
+    )))
+    menciones = diag.menciones if diag else []
+
+    # Quien el Excel menciona o tiene caso aquí, aunque ya no esté activo en
+    # el grupo, se muestra igual (marcado) para no esconder trabajo real.
+    ids_activos = {e.id for e in activos}
+    ids_extra = ({m.estudiante_id for m in menciones if m.estudiante_id} | {c.estudiante_id for c in casos}) - ids_activos
+    extra = list(db.scalars(select(models.Estudiante).where(models.Estudiante.id.in_(ids_extra)))) if ids_extra else []
+
+    hoy = fechas.hoy_colombia()
+    estudiantes = []
+    for e in activos + extra:
+        suyas = [m for m in menciones if m.estudiante_id == e.id]
+        suyos = [c for c in casos if c.estudiante_id == e.id]
+        abiertos = [c for c in suyos if c.estado != "cerrado"]
+        proximos = [c.proximo_seguimiento for c in abiertos if c.proximo_seguimiento]
+        estudiantes.append(schemas.EstudianteOrientacion(
+            id=e.id, documento=e.documento, nombre_completo=e.nombre_completo, genero=e.genero,
+            estado=e.estado, grupo=e.grupo, en_matricula_del_grupo=e.id in ids_activos,
+            situaciones=sorted({m.categoria for m in suyas}), total_situaciones=len(suyas),
+            casos_activos=len(abiertos), casos_total=len(suyos),
+            proximo_seguimiento=min(proximos) if proximos else None,
+        ))
+    estudiantes.sort(key=lambda x: (not x.en_matricula_del_grupo, x.nombre_completo))
+
+    return schemas.GrupoOrientacionDetalle(
+        **_resumen_grupo(sede_id, clave, completos, len(activos), diag, casos, hoy),
+        sede_nombre=sede.nombre,
+        director_grado_nombre=diag.director_grado_nombre if diag else None,
+        estudiantes=estudiantes,
+        casos=[caso_a_vista(c) for c in casos],
+    )
+
+
 # --- Importación de notas desde el PDF de SAPRED ----------------------------
 
 
@@ -1646,6 +2650,12 @@ def importar_bloque_sapred(db: Session, bloque: dict) -> schemas.ImportarSapredR
     resueltos_auto = _conciliar_pendientes(db, revision.id, {"nota"}, satisfechos)
 
     db.commit()
+
+    # Mismo motivo que en importar_bloque_boletin: esta es evidencia SAPRED
+    # nueva (aquí, del Consolidado de notas) — que el hallazgo de grado
+    # distinto quede registrado desde que se importa, no solo cuando alguien
+    # abra el reporte de Conciliación.
+    conciliacion.conciliar(db, anio_lectivo=anio_lectivo, periodo=periodo, sede_id=sede.id, grado=None)
 
     return schemas.ImportarSapredResultadoBloque(
         grado=grado, curso=curso, sede_corta=bloque["sede_corta"], sede_id=sede.id, sede_nombre=sede.nombre,
@@ -2050,6 +3060,13 @@ def importar_bloque_boletin(db: Session, bloque: dict) -> schemas.ImportarBoleti
 
     db.commit()
 
+    # Esta es la evidencia SAPRED entrando al sistema: si algún estudiante de
+    # esta sede quedó con el grado/curso distinto entre SIMAC y SAPRED (ver
+    # conciliacion.py), que quede registrado en el historial de hallazgos
+    # DESDE que se importa, no solo cuando alguien abra el reporte de
+    # Conciliación a mirar.
+    conciliacion.conciliar(db, anio_lectivo=anio_lectivo, periodo=periodo, sede_id=sede.id, grado=None)
+
     return schemas.ImportarBoletinResultadoBloque(
         grado=grado, curso=curso, sede_corta=bloque["sede_corta"], sede_id=sede.id, sede_nombre=sede.nombre,
         periodo=periodo, anio_lectivo=anio_lectivo, reconocido=True,
@@ -2178,43 +3195,9 @@ def actualizar_sapred_sin_coincidencia(
 
 
 # --- Asistencia ------------------------------------------------------------
-
-
-def marcar_asistencia(db: Session, datos: schemas.AsistenciaMarcar) -> models.Asistencia:
-    existente = db.scalar(
-        select(models.Asistencia).where(
-            models.Asistencia.estudiante_id == datos.estudiante_id,
-            models.Asistencia.fecha == datos.fecha,
-        )
-    )
-    if existente:
-        existente.presente = datos.presente
-        db.commit()
-        db.refresh(existente)
-        return existente
-
-    nueva = models.Asistencia(**datos.model_dump())
-    db.add(nueva)
-    db.commit()
-    db.refresh(nueva)
-    return nueva
-
-
-def asistencia_por_grupo_y_fecha(
-    db: Session, sede_id: int, grado: int, fecha: dt.date, curso: int | None = None
-) -> dict[int, models.Asistencia]:
-    stmt = (
-        select(models.Asistencia)
-        .join(models.Estudiante)
-        .where(
-            models.Estudiante.sede_id == sede_id,
-            models.Estudiante.grado == grado,
-            models.Asistencia.fecha == fecha,
-        )
-    )
-    if curso is not None:
-        stmt = stmt.where(models.Estudiante.curso == curso)
-    return {a.estudiante_id: a for a in db.scalars(stmt).all()}
+# La lógica de asistencia por bloque (autorización, registro en lote,
+# auditoría) vive en app/asistencia.py, no aquí — igual que el horario tiene
+# su propio módulo separado de crud.py.
 
 
 def listar_cursos_de_grado(db: Session, sede_id: int, grado: int) -> list[int]:

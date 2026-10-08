@@ -49,3 +49,8 @@ Ambas resuelven todo el pipeline (visión por computadora y generación de
 PDF) sin depender de un servicio externo de pago ni enviar documentos de
 estudiantes fuera del navegador del usuario — requisito explícito del
 sistema (los documentos son de menores de edad).
+
+## lucide.min.js
+
+- Lucide v0.469.0 (https://lucide.dev), licencia ISC. Íconos de línea usados en toda la interfaz en vez de emojis (ver `icono()` en js/comun.js).
+- Descargado de https://cdn.jsdelivr.net/npm/lucide@0.469.0/dist/umd/lucide.min.js — vendorizado para que la app funcione sin internet en la red del colegio.

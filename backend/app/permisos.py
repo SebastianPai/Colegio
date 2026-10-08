@@ -62,6 +62,13 @@ CATALOGO: list[DefinicionPermiso] = [
     DefinicionPermiso("estudiantes.eliminar", "estudiantes", "Eliminar un estudiante", sensible=True),
     DefinicionPermiso("estudiantes.ver_documentos", "estudiantes", "Ver/descargar documentos escaneados (cédula, matrícula...)", sensible=True),
     DefinicionPermiso("estudiantes.documentos_gestionar", "estudiantes", "Subir o eliminar documentos escaneados", sensible=True),
+    # Decisión del colegio (22/09/2026): el director de grupo (AsignacionDocente
+    # con area_id IS NULL) puede ver y editar la ficha de matrícula completa de
+    # los estudiantes de su propio grupo, sin necesitar estudiantes.editar (que
+    # da acceso a TODA la institución). El backend re-valida "es director de
+    # ESE grupo" en cada petición (ver crud.docente_es_director_del_grupo);
+    # este permiso solo habilita que el docente pueda intentarlo.
+    DefinicionPermiso("estudiantes.editar_ficha_grupo", "estudiantes", "Editar la ficha de matrícula de su propio grupo (solo director de grupo)", sensible=True),
 
     # --- Catálogos y académico ------------------------------------------
     DefinicionPermiso("sedes.ver", "catalogos", "Ver las sedes"),
@@ -69,6 +76,7 @@ CATALOGO: list[DefinicionPermiso] = [
     DefinicionPermiso("catalogos.gestionar", "catalogos", "Editar sedes, áreas y catálogos"),
     DefinicionPermiso("docentes.ver", "academico", "Ver el listado de docentes"),
     DefinicionPermiso("docentes.gestionar", "academico", "Editar datos de docentes"),
+    DefinicionPermiso("docentes.evaluar", "academico", "Ver la evaluación de rendimiento por docente (indicadores, semáforo y puntos de atención)", sensible=True),
     DefinicionPermiso("grupos.ver", "academico", "Ver los grupos y sus asignaciones"),
     DefinicionPermiso("grupos.gestionar", "academico", "Asignar docentes a grupos"),
 
@@ -116,10 +124,18 @@ CATALOGO: list[DefinicionPermiso] = [
     DefinicionPermiso("alertas.ver", "alertas", "Ver alertas de inasistencia", fase="alertas"),
     DefinicionPermiso("alertas.atender", "alertas", "Marcar una alerta como atendida", fase="alertas"),
     DefinicionPermiso("alertas.configurar", "alertas", "Configurar los umbrales de alerta", sensible=True, fase="alertas"),
+    DefinicionPermiso("promocion.autorizar", "alertas", "Aprobar o rechazar solicitudes de promoción (pasar de grado con materias perdidas, saltar o bajar de grado)", sensible=True),
 
     # --- Sistema (fase posterior) --------------------------------------------
     DefinicionPermiso("auditoria.ver", "sistema", "Ver el registro de auditoría", sensible=True, fase="sistema"),
     DefinicionPermiso("configuracion.gestionar", "sistema", "Configurar parámetros generales del sistema", sensible=True, fase="sistema"),
+
+    # --- Diagnóstico de orientación/psicología (Excel por grado) -------------
+    DefinicionPermiso("diagnosticos.ver", "diagnosticos", "Ver los diagnósticos de grado y las menciones de estudiantes"),
+    DefinicionPermiso("diagnosticos.importar", "diagnosticos", "Importar el Excel de diagnóstico de orientación", sensible=True),
+    DefinicionPermiso("diagnosticos.vincular", "diagnosticos", "Vincular o corregir a qué estudiante corresponde una mención"),
+    DefinicionPermiso("diagnosticos.observar", "diagnosticos", "Agregar observaciones y notas de seguimiento a un grupo o estudiante"),
+    DefinicionPermiso("diagnosticos.exportar", "diagnosticos", "Imprimir/exportar el reporte del diagnóstico"),
 ]
 
 CODIGOS: set[str] = {p.codigo for p in CATALOGO}
@@ -152,7 +168,7 @@ ROLES_SISTEMA: list[DefinicionRol] = [
             "estudiantes.ver", "estudiantes.crear", "estudiantes.editar", "estudiantes.eliminar",
             "estudiantes.ver_documentos", "estudiantes.documentos_gestionar",
             "sedes.ver", "catalogos.ver", "catalogos.gestionar",
-            "docentes.ver", "docentes.gestionar", "grupos.ver", "grupos.gestionar",
+            "docentes.ver", "docentes.evaluar", "docentes.gestionar", "grupos.ver", "grupos.gestionar",
             "horario.ver", "horario.gestionar", "horario.exportar",
             "boletines.ver", "boletines.gestionar", "boletines.exportar",
             "sapred.importar", "sapred.ejecutar",
@@ -166,8 +182,10 @@ ROLES_SISTEMA: list[DefinicionRol] = [
             # 2). Puede concedérselo desde la pantalla de roles, y cuando
             # exista la auditoría quedará registrado que lo hizo.
             "observaciones.ver", "observaciones.crear", "observaciones.editar", "observaciones.eliminar",
-            "alertas.ver", "alertas.atender", "alertas.configurar",
+            "alertas.ver", "alertas.atender", "promocion.autorizar", "alertas.configurar",
             "auditoria.ver", "configuracion.gestionar",
+            "diagnosticos.ver", "diagnosticos.importar", "diagnosticos.vincular",
+            "diagnosticos.observar", "diagnosticos.exportar",
         ],
     ),
     DefinicionRol(
@@ -195,7 +213,7 @@ ROLES_SISTEMA: list[DefinicionRol] = [
         descripcion="Gestión académica y seguimiento de asistencia. Todas las sedes por ahora (usuario_sedes queda preparada para restringir después).",
         permisos=[
             "estudiantes.ver",
-            "sedes.ver", "catalogos.ver", "docentes.ver", "grupos.ver",
+            "sedes.ver", "catalogos.ver", "docentes.ver", "docentes.evaluar", "grupos.ver",
             "horario.ver", "horario.gestionar",
             "boletines.ver", "boletines.exportar",
             "constancias.ver",
@@ -203,7 +221,7 @@ ROLES_SISTEMA: list[DefinicionRol] = [
             "asistencia.ver", "asistencia.corregir", "asistencia.anular", "asistencia.exportar",
             "asistencia.estadisticas", "asistencia.cumplimiento", "asistencia.resolver_conflictos",
             "observaciones.ver", "observaciones.crear", "observaciones.editar_propias",
-            "alertas.ver", "alertas.atender",
+            "alertas.ver", "alertas.atender", "promocion.autorizar",
         ],
     ),
     DefinicionRol(
@@ -218,6 +236,7 @@ ROLES_SISTEMA: list[DefinicionRol] = [
             "observaciones.ver", "observaciones.crear", "observaciones.editar_propias",
             "observaciones.ver_confidenciales", "seguimientos.gestionar",
             "alertas.ver", "alertas.atender",
+            "diagnosticos.ver", "diagnosticos.vincular", "diagnosticos.observar", "diagnosticos.exportar",
         ],
     ),
     DefinicionRol(
@@ -225,11 +244,10 @@ ROLES_SISTEMA: list[DefinicionRol] = [
         nombre="Docente",
         descripcion="Registrar la asistencia de sus grupos y consultar lo suyo. Interfaz mínima.",
         permisos=[
-            "estudiantes.ver",
-            "sedes.ver", "catalogos.ver", "grupos.ver",
-            "horario.ver",
+            "catalogos.ver", "grupos.ver",
             "asistencia.registrar", "asistencia.ver_propia",
             "observaciones.ver", "observaciones.crear", "observaciones.editar_propias",
+            "estudiantes.editar_ficha_grupo",
         ],
     ),
 ]

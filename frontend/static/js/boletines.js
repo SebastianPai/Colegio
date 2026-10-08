@@ -68,16 +68,16 @@ let auditoriaSapredIntervalo = null;
 let auditoriaSapredSedesSeleccionadas = null; // Set<number> de sede_id, null = todas
 let mostrarInformeAuditoriaModal = false; // toggle "ver informe para imprimir" dentro del detalle de una auditoría pasada
 const ESTADOS_AUDITORIA = {
-  pendiente: { icono: "⏳", texto: "Pendiente" },
-  esperando_login: { icono: "🔑", texto: "Esperando que inicies sesión en SAPRED" },
-  en_proceso: { icono: "⚙️", texto: "En proceso" },
-  completada: { icono: "✅", texto: "Completada" },
-  error: { icono: "❌", texto: "Error" },
+  pendiente: { icono: "<i data-lucide=hourglass class=ico></i> ", texto: "Pendiente" },
+  esperando_login: { icono: "<i data-lucide=key-round class=ico></i> ", texto: "Esperando que inicies sesión en SAPRED" },
+  en_proceso: { icono: "<i data-lucide=settings class=ico></i> ", texto: "En proceso" },
+  completada: { icono: "<i data-lucide=circle-check class=ico></i> ", texto: "Completada" },
+  error: { icono: "<i data-lucide=circle-x class=ico></i> ", texto: "Error" },
 };
 const ESTADOS_SEDE_AUDITORIA = {
-  completada: { icono: "✓", clase: "ok" },
-  advertencia: { icono: "⚠", clase: "proceso" },
-  error: { icono: "✗", clase: "alerta" },
+  completada: { icono: "<i data-lucide=check class=ico></i> ", clase: "ok" },
+  advertencia: { icono: "<i data-lucide=triangle-alert class=ico></i> ", clase: "proceso" },
+  error: { icono: "<i data-lucide=x class=ico></i> ", clase: "alerta" },
 };
 
 // --- Generar boletines por sede (Boletines -> SAPRED -> Generar boletines) --
@@ -85,10 +85,10 @@ let generarBoletinesSedesSeleccionadas = null; // Set<number>, null = todas
 let generarBoletinesIntervalo = null;
 
 const ESTADOS_BOLETIN = {
-  completo: { icono: "🟢", texto: "Completo", clase: "ok" },
-  en_proceso: { icono: "🟡", texto: "En proceso", clase: "proceso" },
-  pendiente: { icono: "🔴", texto: "Pendiente", clase: "alerta" },
-  sin_informacion: { icono: "⚪", texto: "Sin información", clase: "" },
+  completo: { icono: "<span class=punto-verde></span>", texto: "Completo", clase: "ok" },
+  en_proceso: { icono: "<span class=punto-amarillo></span>", texto: "En proceso", clase: "proceso" },
+  pendiente: { icono: "<span class=punto-rojo></span>", texto: "Pendiente", clase: "alerta" },
+  sin_informacion: { icono: "<span class=punto-gris></span>", texto: "Sin información", clase: "" },
 };
 
 const ETIQUETAS_ESTADO_CONTINUIDAD = {
@@ -235,12 +235,12 @@ function informeBoletinesHtml(filtrados, gruposPorSede, resumen) {
         <div class="campo"><span class="etiqueta">GRUPOS COMPLETOS:</span><span class="valor">${completos.length} de ${filtrados.length}</span></div>
         ${
           !esGrupoUnico && resumen
-            ? `<div class="campo"><span class="etiqueta">RESUMEN INSTITUCIONAL (todas las sedes):</span><span class="valor">🟢 ${resumen.completos} completos · 🟡 ${resumen.en_proceso} en proceso · 🔴 ${resumen.pendientes} pendientes · ⚪ ${resumen.sin_informacion} sin información (${resumen.porcentaje_completo}% completo)</span></div>`
+            ? `<div class="campo"><span class="etiqueta">RESUMEN INSTITUCIONAL (todas las sedes):</span><span class="valor"><span class=punto-verde></span>${resumen.completos} completos · <span class=punto-amarillo></span>${resumen.en_proceso} en proceso · <span class=punto-rojo></span>${resumen.pendientes} pendientes · <span class=punto-gris></span>${resumen.sin_informacion} sin información (${resumen.porcentaje_completo}% completo)</span></div>`
             : ""
         }
       </div>
 
-      <h3 class="informe-sede-titulo informe-titulo-pendientes">⚠ FALTAN POR COMPLETAR (${pendientes.length})</h3>
+      <h3 class="informe-sede-titulo informe-titulo-pendientes"><i data-lucide=triangle-alert class=ico></i> FALTAN POR COMPLETAR (${pendientes.length})</h3>
       ${
         pendientes.length
           ? `<table class="tabla-informe">
@@ -250,7 +250,7 @@ function informeBoletinesHtml(filtrados, gruposPorSede, resumen) {
           : '<p class="pendiente">Ninguno — todos los grupos filtrados están completos.</p>'
       }
 
-      <h3 class="informe-sede-titulo">✓ Completos (${completos.length})</h3>
+      <h3 class="informe-sede-titulo"><i data-lucide=check class=ico></i> Completos (${completos.length})</h3>
       <p class="informe-completos-lista">
         ${completos.length ? completos.map((g) => `${g.sede_nombre} ${g.nombre_grupo}`).join(" · ") : "Ninguno todavía."}
       </p>
@@ -264,14 +264,14 @@ function informeBoletinesHtml(filtrados, gruposPorSede, resumen) {
 function resultadoImportarSapredHtml(resultado) {
   const filaBloque = (b) => {
     if (!b.reconocido) {
-      return `<li>⚠ Curso ${b.grado}-${b.curso} "${b.sede_corta}" — ${b.motivo_no_reconocido}</li>`;
+      return `<li><i data-lucide=triangle-alert class=ico></i> Curso ${b.grado}-${b.curso} "${b.sede_corta}" — ${b.motivo_no_reconocido}</li>`;
     }
     const partes = [`${b.pendientes_creados} pendiente(s) nuevo(s)`, `${b.pendientes_ya_existian} ya estaban`];
-    if (b.pendientes_resueltos_auto) partes.push(`✅ ${b.pendientes_resueltos_auto} viejo(s) cerrado(s) (ya en SAPRED)`);
+    if (b.pendientes_resueltos_auto) partes.push(`<i data-lucide=circle-check class=ico></i> ${b.pendientes_resueltos_auto} viejo(s) cerrado(s) (ya en SAPRED)`);
     if (b.areas_nuevas.length) partes.push(`áreas nuevas en el catálogo: ${b.areas_nuevas.join(", ")}`);
     return `<li>${b.sede_nombre} — Grado ${b.grado}, curso ${b.curso} (P${b.periodo} ${b.anio_lectivo}): ${partes.join(" · ")}${
       b.estudiantes_no_encontrados.length
-        ? `<br><span class="pendiente">⚠ No están en la base de datos: ${b.estudiantes_no_encontrados.join(" · ")}</span>`
+        ? `<br><span class="pendiente"><i data-lucide=triangle-alert class=ico></i> No están en la base de datos: ${b.estudiantes_no_encontrados.join(" · ")}</span>`
         : ""
     }</li>`;
   };
@@ -282,18 +282,18 @@ function resultadoImportarSapredHtml(resultado) {
       <strong>Importación de SAPRED:</strong> ${resultado.bloques.length} curso(s) leído(s) de ${
         fallidos.length ? `${resultado.bloques.length + fallidos.length} archivo(s)` : "los PDF subidos"
       } · ${resultado.total_pendientes_creados} pendiente(s) nuevo(s) en total
-      ${resultado.total_pendientes_resueltos_auto ? ` · ✅ ${resultado.total_pendientes_resueltos_auto} pendiente(s) viejo(s) cerrado(s) automáticamente (ya estaban cargados)` : ""}
+      ${resultado.total_pendientes_resueltos_auto ? ` · <i data-lucide=circle-check class=ico></i> ${resultado.total_pendientes_resueltos_auto} pendiente(s) viejo(s) cerrado(s) automáticamente (ya estaban cargados)` : ""}
       ${resultado.total_estudiantes_no_encontrados ? ` · ${resultado.total_estudiantes_no_encontrados} estudiante(s) de SAPRED no están en la base de datos` : ""}
       <ul style="margin:8px 0 4px">${resultado.bloques.map(filaBloque).join("")}</ul>
       ${
         fallidos.length
-          ? `<p class="pendiente">⚠ No se pudieron leer: ${fallidos.join(" · ")}</p>`
+          ? `<p class="pendiente"><i data-lucide=triangle-alert class=ico></i> No se pudieron leer: ${fallidos.join(" · ")}</p>`
           : ""
       }
       <p class="pendiente" style="margin-top:10px">
         Estas notas ya quedaron en la base de datos. Para ver si generaron alguna diferencia contra SIMAC:
       </p>
-      <button type="button" class="boton" id="btn-ver-conciliacion-sapred">📊 Ver conciliación SIMAC ↔ SAPRED</button>
+      <button type="button" class="boton" id="btn-ver-conciliacion-sapred"><i data-lucide=chart-column class=ico></i> Ver conciliación SIMAC <i data-lucide=arrow-left-right class=ico></i> SAPRED</button>
       <button type="button" class="boton secundario" id="btn-cerrar-resultado-sapred">Cerrar</button>
     </div>
   `;
@@ -302,7 +302,7 @@ function resultadoImportarSapredHtml(resultado) {
 function resultadoImportarBoletinHtml(resultado) {
   const filaBloque = (b) => {
     if (!b.reconocido) {
-      return `<li>⚠ Curso ${b.grado}-${b.curso} "${b.sede_corta}" — ${b.motivo_no_reconocido}</li>`;
+      return `<li><i data-lucide=triangle-alert class=ico></i> Curso ${b.grado}-${b.curso} "${b.sede_corta}" — ${b.motivo_no_reconocido}</li>`;
     }
     const partes = [
       `${b.conceptos_pendientes_creados} concepto(s) faltante(s) nuevo(s)`,
@@ -312,13 +312,13 @@ function resultadoImportarBoletinHtml(resultado) {
     if (b.conceptos_pendientes_ya_existian || b.observaciones_pendientes_ya_existian || b.notas_pendientes_ya_existian) {
       partes.push(`ya estaban: ${b.conceptos_pendientes_ya_existian} concepto(s), ${b.notas_pendientes_ya_existian || 0} nota(s), ${b.observaciones_pendientes_ya_existian} observación(es)`);
     }
-    if (b.pendientes_resueltos_auto) partes.push(`✅ ${b.pendientes_resueltos_auto} pendiente(s) viejo(s) cerrado(s) (ya en SAPRED)`);
+    if (b.pendientes_resueltos_auto) partes.push(`<i data-lucide=circle-check class=ico></i> ${b.pendientes_resueltos_auto} pendiente(s) viejo(s) cerrado(s) (ya en SAPRED)`);
     if (b.docentes_area_asignados.length) partes.push(`profesor por materia asignado: ${b.docentes_area_asignados.join(", ")}`);
     if (b.docente_grupo_asignado) partes.push(`director de grupo: ${b.docente_grupo_asignado}`);
     if (b.areas_nuevas.length) partes.push(`áreas nuevas: ${b.areas_nuevas.join(", ")}`);
     return `<li>${b.sede_nombre} — Grado ${b.grado}, curso ${b.curso} (P${b.periodo} ${b.anio_lectivo}): ${partes.join(" · ")}${
       b.estudiantes_no_encontrados.length
-        ? `<br><span class="pendiente">⚠ No están en la base de datos: ${b.estudiantes_no_encontrados.join(" · ")}</span>`
+        ? `<br><span class="pendiente"><i data-lucide=triangle-alert class=ico></i> No están en la base de datos: ${b.estudiantes_no_encontrados.join(" · ")}</span>`
         : ""
     }</li>`;
   };
@@ -328,10 +328,10 @@ function resultadoImportarBoletinHtml(resultado) {
     <div class="exito-caja" style="margin-top:10px">
       <strong>Importación del Boletín informativo:</strong> ${resultado.bloques.length} curso(s) leído(s)
       · ${resultado.total_conceptos_pendientes} concepto(s) · ${resultado.total_notas_pendientes || 0} nota(s) · ${resultado.total_observaciones_pendientes} observación(es) faltante(s)
-      ${resultado.total_pendientes_resueltos_auto ? ` · ✅ ${resultado.total_pendientes_resueltos_auto} pendiente(s) viejo(s) cerrado(s) automáticamente (ya estaban cargados)` : ""}
+      ${resultado.total_pendientes_resueltos_auto ? ` · <i data-lucide=circle-check class=ico></i> ${resultado.total_pendientes_resueltos_auto} pendiente(s) viejo(s) cerrado(s) automáticamente (ya estaban cargados)` : ""}
       ${resultado.total_estudiantes_no_encontrados ? ` · ${resultado.total_estudiantes_no_encontrados} estudiante(s) del boletín no están en la base de datos` : ""}
       <ul style="margin:8px 0 4px">${resultado.bloques.map(filaBloque).join("")}</ul>
-      ${fallidos.length ? `<p class="pendiente">⚠ No se pudieron leer: ${fallidos.join(" · ")}</p>` : ""}
+      ${fallidos.length ? `<p class="pendiente"><i data-lucide=triangle-alert class=ico></i> No se pudieron leer: ${fallidos.join(" · ")}</p>` : ""}
       <p class="pendiente" style="margin-top:10px">Lo que falta quedó como pendiente (tipo concepto / observación). Se ve ordenado en Boletines → Pendientes y en Notas → Grilla.</p>
       <button type="button" class="boton secundario" id="btn-cerrar-resultado-boletin">Cerrar</button>
     </div>
@@ -407,10 +407,10 @@ async function renderSeccionResumen() {
   contenedor.innerHTML = `
     <div class="resumen-reportes">
       <div class="metric-card"><span>Grupos</span><strong>${resumen.total_grupos}</strong></div>
-      <div class="metric-card ok"><span>🟢 Completos</span><strong>${resumen.completos}</strong></div>
-      <div class="metric-card proceso"><span>🟡 En proceso</span><strong>${resumen.en_proceso}</strong></div>
-      <div class="metric-card alerta"><span>🔴 Pendientes</span><strong>${resumen.pendientes}</strong></div>
-      <div class="metric-card"><span>⚪ Sin información</span><strong>${resumen.sin_informacion}</strong></div>
+      <div class="metric-card ok"><span><span class=punto-verde></span>Completos</span><strong>${resumen.completos}</strong></div>
+      <div class="metric-card proceso"><span><span class=punto-amarillo></span>En proceso</span><strong>${resumen.en_proceso}</strong></div>
+      <div class="metric-card alerta"><span><span class=punto-rojo></span>Pendientes</span><strong>${resumen.pendientes}</strong></div>
+      <div class="metric-card"><span><span class=punto-gris></span>Sin información</span><strong>${resumen.sin_informacion}</strong></div>
       <div class="metric-card"><span>% completo</span><strong>${resumen.porcentaje_completo}%</strong></div>
       <div class="metric-card ${resumen.total_pendientes_individuales ? "alerta" : "ok"}"><span>Pendientes puntuales</span><strong>${resumen.total_pendientes_individuales}</strong></div>
     </div>
@@ -517,7 +517,7 @@ async function renderSeccionGrupos() {
         Solo pendientes
       </label>
       <button type="button" class="boton secundario" id="btn-toggle-informe">
-        ${mostrarInformeBoletines ? "Ocultar informe" : "🖨 Ver informe para imprimir"}
+        ${mostrarInformeBoletines ? "Ocultar informe" : "<i data-lucide=printer class=ico></i> Ver informe para imprimir"}
       </button>
     </div>
 
@@ -668,7 +668,7 @@ function tablaFaltantesHtml(pendientes) {
     : pendientes;
 
   if (!filtrados.length) {
-    return `<div class="estado-vacio"><div class="estado-vacio-icono">🎉</div><h3>${
+    return `<div class="estado-vacio"><div class="estado-vacio-icono"><i data-lucide=party-popper class=ico></i> </div><h3>${
       pendientes.length ? "Ningún resultado para esa búsqueda" : "Sin pendientes para este filtro"
     }</h3><p>Prueba cambiando los filtros o la búsqueda.</p></div>`;
   }
@@ -689,8 +689,8 @@ function tablaFaltantesHtml(pendientes) {
     <div class="panel-tabla-header no-imprimir">
       <span class="conteo-resultados">${filtrados.length} pendiente(s)${nSeleccionados ? ` · ${nSeleccionados} seleccionado(s)` : ""}</span>
       <span>
-        <button type="button" class="boton secundario" id="btn-exportar-seleccionados" ${nSeleccionados ? "" : "disabled"}>⬇ Exportar seleccionados</button>
-        <button type="button" class="boton secundario" id="btn-exportar-todos">⬇ Exportar todos (Excel)</button>
+        <button type="button" class="boton secundario" id="btn-exportar-seleccionados" ${nSeleccionados ? "" : "disabled"}><i data-lucide=download class=ico></i> Exportar seleccionados</button>
+        <button type="button" class="boton secundario" id="btn-exportar-todos"><i data-lucide=download class=ico></i> Exportar todos (Excel)</button>
       </span>
     </div>
     <div class="tabla-scroll">
@@ -721,8 +721,8 @@ function filaFaltanteHtml(p) {
   const estudianteHtml = p.estudiante
     ? `<span class="fila-clicable" ${navGrilla} title="Abrir la grilla de notas de este grupo, resaltando al estudiante" style="text-decoration:underline; cursor:pointer">${p.estudiante.nombre_completo}${
         p.estudiante.retirado
-          ? ' <span class="chip-retiro chip-retirado">✖ RETIRADO</span>'
-          : p.estudiante.posible_retirado ? ' <span class="chip-retiro">🚪 posible retiro</span>' : ""
+          ? ' <span class="chip-retiro chip-retirado"><i data-lucide=x class=ico></i> RETIRADO</span>'
+          : p.estudiante.posible_retirado ? ' <span class="chip-retiro"><i data-lucide=door-open class=ico></i> posible retiro</span>' : ""
       }</span>`
     : '<span class="pendiente">Todo el grupo</span>';
   return `
@@ -732,15 +732,15 @@ function filaFaltanteHtml(p) {
       <td>${p.area ? p.area.nombre : "General (todo el grupo)"}</td>
       <td>${tipoTexto}${p.detalle ? `: ${p.detalle}` : ""}</td>
       <td>${p.sede_nombre} · ${p.nombre_grupo}${p.docente ? ` · ${p.docente.nombre_completo}` : ""}</td>
-      <td><span class="badge-verif ${p.resuelto ? "ok" : "alerta"}">${p.resuelto ? "✓ Resuelto" : "⚠ Pendiente"}</span></td>
+      <td><span class="badge-verif ${p.resuelto ? "ok" : "alerta"}">${p.resuelto ? "<i data-lucide=check class=ico></i> Resuelto" : "<i data-lucide=triangle-alert class=ico></i> Pendiente"}</span></td>
       <td>
         ${p.resuelto ? "" : `<button type="button" class="boton secundario" data-resolver="${p.id}">Marcar resuelto</button>`}
         ${
           p.estudiante
-            ? `<button type="button" class="boton secundario" data-posible-retiro="${p.estudiante.id}" data-pr-estado="${p.estudiante.posible_retirado ? "1" : "0"}" title="Marcar/quitar 'posible retirado': deja de contar en los pendientes">${p.estudiante.posible_retirado ? "↩ Cuenta de nuevo" : "🚪 Posible retiro"}</button>`
+            ? `<button type="button" class="boton secundario" data-posible-retiro="${p.estudiante.id}" data-pr-estado="${p.estudiante.posible_retirado ? "1" : "0"}" title="Marcar/quitar 'posible retirado': deja de contar en los pendientes">${p.estudiante.posible_retirado ? "Cuenta de nuevo" : "Posible retiro"}</button>`
             : ""
         }
-        <button type="button" class="boton secundario" data-eliminar-pendiente="${p.id}" title="Eliminar (ej. si se agregó por error)">🗑</button>
+        <button type="button" class="boton secundario" data-eliminar-pendiente="${p.id}" title="Eliminar (ej. si se agregó por error)"></button>
       </td>
     </tr>`;
 }
@@ -784,7 +784,7 @@ async function renderSeccionPendientes() {
       </div>
     </div>
     <div class="buscador-principal no-imprimir">
-      <span class="buscador-principal-icono" aria-hidden="true">🔎</span>
+      <span class="buscador-principal-icono" aria-hidden="true"><i data-lucide=search class=ico></i> </span>
       <input type="text" id="buscar-faltantes" placeholder="Buscar por estudiante, grupo, docente o área..." value="${busquedaFaltantes}" />
     </div>
     <div class="barra-filtros no-imprimir">
@@ -1081,7 +1081,7 @@ function pintarReporteNotas(contenedor, r, sedes) {
     </div>
 
     <details class="seccion-colapsable" ${r.estudiantes_en_riesgo.length ? "open" : ""}>
-      <summary>⚠ Estudiantes en riesgo — ${r.estudiantes_en_riesgo.length} estudiante(s) con ${r.riesgo_minimo}+ notas bajas</summary>
+      <summary><i data-lucide=triangle-alert class=ico></i> Estudiantes en riesgo — ${r.estudiantes_en_riesgo.length} estudiante(s) con ${r.riesgo_minimo}+ notas bajas</summary>
       ${
         r.estudiantes_en_riesgo.length
           ? `<div class="tabla-scroll tabla-scroll-alto"><table><thead><tr><th>Sede</th><th>Grupo</th><th>Estudiante</th><th>Notas bajas</th><th>Áreas</th><th>Promedio</th></tr></thead>
@@ -1091,7 +1091,7 @@ function pintarReporteNotas(contenedor, r, sedes) {
     </details>
 
     <details class="seccion-colapsable">
-      <summary>🔴 Notas bajas — ${r.notas_bajas.length} nota(s)</summary>
+      <summary><span class=punto-rojo></span>Notas bajas — ${r.notas_bajas.length} nota(s)</summary>
       ${
         r.notas_bajas.length
           ? `<div class="tabla-scroll tabla-scroll-alto"><table><thead><tr><th>Sede</th><th>Grupo</th><th>Estudiante</th><th>Área</th><th>Nota</th><th>Docente</th></tr></thead>
@@ -1101,7 +1101,7 @@ function pintarReporteNotas(contenedor, r, sedes) {
     </details>
 
     <details class="seccion-colapsable">
-      <summary>🟢 Notas altas — ${r.notas_altas.length} nota(s)</summary>
+      <summary><span class=punto-verde></span>Notas altas — ${r.notas_altas.length} nota(s)</summary>
       ${
         r.notas_altas.length
           ? `<div class="tabla-scroll tabla-scroll-alto"><table><thead><tr><th>Sede</th><th>Grupo</th><th>Estudiante</th><th>Área</th><th>Nota</th><th>Docente</th></tr></thead>
@@ -1111,7 +1111,7 @@ function pintarReporteNotas(contenedor, r, sedes) {
     </details>
 
     <div class="no-imprimir" style="text-align:right; margin-top:14px">
-      <button type="button" class="boton secundario" id="btn-exportar-reporte-notas">⬇ Exportar a Excel</button>
+      <button type="button" class="boton secundario" id="btn-exportar-reporte-notas"><i data-lucide=download class=ico></i> Exportar a Excel</button>
     </div>
   `;
 
@@ -1182,7 +1182,7 @@ function celdaGrillaHtml(areaId, celda) {
     return `<td class="celda-falta" data-celda-pendiente="${celda.pendiente_id}" title="Falta la nota en SAPRED — clic para marcar como revisado">FALTA${cn}</td>`;
   }
   if (celda.estado === "revisado") {
-    return `<td class="celda-revisado" data-celda-pendiente="${celda.pendiente_id}" data-celda-reabrir="1" title="Ya se validó administrativamente — clic para volver a marcar como falta">✓ revisado${cn}</td>`;
+    return `<td class="celda-revisado" data-celda-pendiente="${celda.pendiente_id}" data-celda-reabrir="1" title="Ya se validó administrativamente — clic para volver a marcar como falta">revisado${cn}</td>`;
   }
   if (celda.estado === "sin_auditar") {
     return `<td class="celda-sin-auditar${cnFalta}" title="Este grupo todavía no se ha auditado contra SAPRED en este período">—${cn}</td>`;
@@ -1193,9 +1193,9 @@ function celdaGrillaHtml(areaId, celda) {
 function celdaObservacionHtml(fila) {
   const e = fila.observacion_estado;
   const t = (fila.observacion_texto || "").replace(/"/g, "&quot;");
-  if (e === "tiene") return `<td class="celda-nota" title="${t}">✓</td>`;
+  if (e === "tiene") return `<td class="celda-nota" title="${t}"></td>`;
   if (e === "falta") return `<td class="celda-falta" title="Falta la observación del director de grupo">FALTA</td>`;
-  if (e === "revisado") return `<td class="celda-revisado" title="Faltaba, ya revisado">✓ rev.</td>`;
+  if (e === "revisado") return `<td class="celda-revisado" title="Faltaba, ya revisado">rev.</td>`;
   if (e === "sin_auditar") return `<td class="celda-sin-auditar" title="No se ha importado el Boletín informativo de este grupo">—</td>`;
   return `<td class="celda-sin-dato">·</td>`;
 }
@@ -1264,8 +1264,8 @@ function grupoGrillaHtml(g) {
                   <td class="col-codigo">${f.documento}</td>
                   <td class="col-estudiante">${
                     f.retirado
-                      ? `<span class="nombre-retirado">${f.nombre_completo}</span> <span class="chip-retiro chip-retirado">✖ RETIRADO</span>`
-                      : f.nombre_completo + (f.posible_retirado ? ' <span class="chip-retiro">🚪 posible retiro</span>' : "")
+                      ? `<span class="nombre-retirado">${f.nombre_completo}</span> <span class="chip-retiro chip-retirado"><i data-lucide=x class=ico></i> RETIRADO</span>`
+                      : f.nombre_completo + (f.posible_retirado ? ' <span class="chip-retiro"><i data-lucide=door-open class=ico></i> posible retiro</span>' : "")
                   }</td>
                   ${g.areas.map((a) => celdaGrillaHtml(a.id, f.celdas[a.id])).join("")}
                   ${celdaObservacionHtml(f)}
@@ -1343,9 +1343,9 @@ function informeFaltantesGrillaHtml(grupos, sedes) {
         </table>`
               )
               .join("")
-          : '<p class="pendiente">No falta nada con los filtros actuales. 🎉</p>'
+          : '<p class="pendiente">No falta nada con los filtros actuales. <i data-lucide=party-popper class=ico></i> </p>'
       }
-      ${completos.length ? `<h3 class="informe-sede-titulo">✓ Grupos completos</h3><p class="informe-completos-lista">${completos.join(" · ")}</p>` : ""}
+      ${completos.length ? `<h3 class="informe-sede-titulo"><i data-lucide=check class=ico></i> Grupos completos</h3><p class="informe-completos-lista">${completos.join(" · ")}</p>` : ""}
     </div>
     <div class="toolbar no-imprimir"><button type="button" class="boton" onclick="window.print()">Imprimir</button></div>
   `;
@@ -1424,7 +1424,7 @@ function pintarGrilla(contenedor, grupos, sedes) {
         Solo lo que falta (nota, concepto u observación)
       </label>
       <button type="button" class="boton secundario" id="btn-grilla-informe">
-        ${grillaModoInforme ? "Ocultar informe" : "🖨 Informe de faltantes para imprimir"}
+        ${grillaModoInforme ? "Ocultar informe" : "<i data-lucide=printer class=ico></i> Informe de faltantes para imprimir"}
       </button>
     </div>
 
@@ -1440,11 +1440,11 @@ function pintarGrilla(contenedor, grupos, sedes) {
 
     <div id="barra-seleccion-grilla" class="barra-seleccion-grilla no-imprimir" ${grillaSeleccion.size ? "" : "hidden"}>
       <strong id="barra-seleccion-conteo">${grillaSeleccion.size} seleccionado(s)</strong>
-      <button type="button" class="boton secundario" id="btn-sel-posible-retiro">🚪 Marcar posible retiro</button>
-      <button type="button" class="boton secundario" id="btn-sel-retirado">✖ Marcar retirado</button>
-      <button type="button" class="boton secundario" id="btn-sel-quitar-retiro">↩ Quitar marca (retiro)</button>
-      <button type="button" class="boton secundario" id="btn-sel-revisado">✓ Marcar revisado lo que les falta</button>
-      <button type="button" class="boton-texto-chico" id="btn-sel-limpiar">✕ Quitar selección</button>
+      <button type="button" class="boton secundario" id="btn-sel-posible-retiro"><i data-lucide=door-open class=ico></i> Marcar posible retiro</button>
+      <button type="button" class="boton secundario" id="btn-sel-retirado"><i data-lucide=x class=ico></i> Marcar retirado</button>
+      <button type="button" class="boton secundario" id="btn-sel-quitar-retiro"><i data-lucide=undo-2 class=ico></i> Quitar marca (retiro)</button>
+      <button type="button" class="boton secundario" id="btn-sel-revisado"><i data-lucide=check class=ico></i> Marcar revisado lo que les falta</button>
+      <button type="button" class="boton-texto-chico" id="btn-sel-limpiar"><i data-lucide=x class=ico></i> Quitar selección</button>
     </div>
 
     ${
@@ -1719,17 +1719,17 @@ async function renderSeccionPorDocente() {
         <strong>${d.docente.nombre_completo}</strong>
         ${
           d.al_dia
-            ? `<span class="badge-estado ok">✅ Al día</span>`
-            : `<span class="badge-estado alerta">⚠ ${d.abiertos} pendiente${d.abiertos > 1 ? "s" : ""}</span>`
+            ? `<span class="badge-estado ok"><i data-lucide=circle-check class=ico></i> Al día</span>`
+            : `<span class="badge-estado alerta"><i data-lucide=triangle-alert class=ico></i> ${d.abiertos} pendiente${d.abiertos > 1 ? "s" : ""}</span>`
         }
       </div>
       ${
         d.dirige && d.dirige.length
-          ? `<div class="doc-pend-dirige" title="Como director de grupo responde por las observaciones y la nota de comportamiento (Desempeño Actitudinal) de este grupo">🎓 Director de grupo: ${d.dirige.join(" · ")}</div>`
+          ? `<div class="doc-pend-dirige" title="Como director de grupo responde por las observaciones y la nota de comportamiento (Desempeño Actitudinal) de este grupo">Director de grupo: ${d.dirige.join(" · ")}</div>`
           : ""
       }
       ${!d.al_dia ? `<div class="doc-pend-desglose">${desglose(d.por_tipo)}</div>` : ""}
-      ${d.sedes && d.sedes.length ? `<div class="doc-pend-sede">🏫 ${d.sedes.join(" · ")}</div>` : ""}
+      ${d.sedes && d.sedes.length ? `<div class="doc-pend-sede"><i data-lucide=school class=ico></i> ${d.sedes.join(" · ")}</div>` : ""}
       <div class="doc-pend-grupos">${d.grupos.join(" · ")}</div>
       ${!d.al_dia ? `<button type="button" class="boton-texto-chico" data-abrir-doc="${d.docente.id}">${porDocenteExpandido === d.docente.id ? "Ocultar" : "Ver qué falta →"}</button>` : ""}
       ${porDocenteExpandido === d.docente.id ? `<div class="doc-pend-detalle" id="doc-detalle-${d.docente.id}"><p class="estado-carga">Cargando…</p></div>` : ""}
@@ -1753,24 +1753,24 @@ async function renderSeccionPorDocente() {
             ${sedesLista.map((s) => `<option value="${s}" ${s === porDocenteSede ? "selected" : ""}>${s}</option>`).join("")}
           </select>
         </label>
-        <button type="button" class="boton secundario" id="btn-reporte-por-docente">🖨 Reporte para imprimir</button>
-        <button type="button" class="boton secundario" id="btn-depurar-obsoletos" title="Cierra los pendientes que ya están cargados en SAPRED pero quedaron abiertos de una auditoría vieja">🧹 Limpiar ya resueltos</button>
+        <button type="button" class="boton secundario" id="btn-reporte-por-docente"><i data-lucide=printer class=ico></i> Reporte para imprimir</button>
+        <button type="button" class="boton secundario" id="btn-depurar-obsoletos" title="Cierra los pendientes que ya están cargados en SAPRED pero quedaron abiertos de una auditoría vieja">Limpiar ya resueltos</button>
       </div>
     </div>
     <div class="buscador-principal no-imprimir">
-      <span class="buscador-principal-icono" aria-hidden="true">🔎</span>
+      <span class="buscador-principal-icono" aria-hidden="true"><i data-lucide=search class=ico></i> </span>
       <input type="text" id="buscar-por-docente" placeholder="Buscar profesor, grupo o área…" value="${porDocenteBusqueda}" />
     </div>
     ${
       !resp.hay_auditoria
-        ? `<div class="callout-boletines warn">⚠ Todavía no se ha hecho la auditoría (ni importado nada) del <strong>Período ${filtroBoletinesPeriodo}</strong>. Ve a <strong>SAPRED → Auditoría</strong> y elige ese período. Hasta entonces esta lista no refleja lo que falta de verdad.</div>`
+        ? `<div class="callout-boletines warn"><i data-lucide=triangle-alert class=ico></i> Todavía no se ha hecho la auditoría (ni importado nada) del <strong>Período ${filtroBoletinesPeriodo}</strong>. Ve a <strong>SAPRED → Auditoría</strong> y elige ese período. Hasta entonces esta lista no refleja lo que falta de verdad.</div>`
         : ""
     }
     <p class="conteo-resultados">Período ${filtroBoletinesPeriodo} · ${conPendientes.length} con pendientes · ${alDia.length} al día · ${lista.length} docentes en total</p>
     ${
       conPendientes.length
         ? `<div class="doc-pend-lista">${conPendientes.map(tarjeta).join("")}</div>`
-        : `<div class="estado-vacio"><div class="estado-vacio-icono">${resp.hay_auditoria ? "🎉" : "📭"}</div><h3>${resp.hay_auditoria ? "Nadie tiene pendientes con este filtro" : "Sin datos de este período"}</h3></div>`
+        : `<div class="estado-vacio"><div class="estado-vacio-icono">${resp.hay_auditoria ? "<i data-lucide=party-popper class=ico></i> " : "<i data-lucide=inbox class=ico></i> "}</div><h3>${resp.hay_auditoria ? "Nadie tiene pendientes con este filtro" : "Sin datos de este período"}</h3></div>`
     }
     ${
       alDia.length
@@ -1815,7 +1815,7 @@ async function renderSeccionPorDocente() {
     } catch (err) {
       alert(err.message);
       btn.disabled = false;
-      btn.textContent = "🧹 Limpiar ya resueltos";
+      btn.textContent = "Limpiar ya resueltos";
     }
   });
 
@@ -1915,14 +1915,14 @@ async function renderReporteFaltantesDocente() {
     <section class="reporte-docente${reporteDocenteUnaHoja ? " una-hoja" : ""}">
       <h3 class="reporte-docente-nombre">${d.docente.nombre_completo}</h3>
       <p class="reporte-docente-sub">
-        ${d.sedes && d.sedes.length ? `🏫 ${d.sedes.join(", ")} · ` : ""}
-        ${d.dirige.length ? `🎓 Director de grupo de <strong>${d.dirige.join(", ")}</strong> · ` : ""}
+        ${d.sedes && d.sedes.length ? `<i data-lucide=school class=ico></i> ${d.sedes.join(", ")} · ` : ""}
+        ${d.dirige.length ? `<i data-lucide=graduation-cap class=ico></i> Director de grupo de <strong>${d.dirige.join(", ")}</strong> · ` : ""}
         Le falta registrar información en <strong>${new Set(d.items.map((it) => it.nombre_grupo)).size}</strong> grupo(s).
       </p>
       ${bloquesDe(d).map(bloqueHtml).join("")}
       ${
         d.grupos_ok && d.grupos_ok.length
-          ? `<p class="reporte-ok">✓ Sin pendientes en: ${d.grupos_ok.join(", ")}</p>`
+          ? `<p class="reporte-ok"><i data-lucide=check class=ico></i> Sin pendientes en: ${d.grupos_ok.join(", ")}</p>`
           : ""
       }
     </section>`;
@@ -1936,7 +1936,7 @@ async function renderReporteFaltantesDocente() {
         ${sedesReporte.map((s) => `<option value="${s}" ${s === porDocenteSede ? "selected" : ""}>${s}</option>`).join("")}
       </select>
       <label class="check-linea"><input type="checkbox" id="chk-una-hoja" ${reporteDocenteUnaHoja ? "checked" : ""} /> Una hoja por profesor</label>
-      <button type="button" class="boton" onclick="window.print()">🖨 Imprimir / Guardar PDF</button>
+      <button type="button" class="boton" onclick="window.print()"><i data-lucide=printer class=ico></i> Imprimir / Guardar PDF</button>
     </div>
     <div class="hoja-imprimir">
       ${membreteHtml(`LO QUE LE FALTA A CADA DOCENTE — PERÍODO ${filtroBoletinesPeriodo} · ${filtroBoletinesAnio}`)}
@@ -1948,7 +1948,7 @@ async function renderReporteFaltantesDocente() {
       ${
         docentes.length
           ? docentes.map(bloqueDocente).join("")
-          : `<p class="pendiente">${totalDocentesConPendientes ? "Ningún profesor coincide con el filtro." : "Nadie tiene pendientes en este período. 🎉"}</p>`
+          : `<p class="pendiente">${totalDocentesConPendientes ? "Ningún profesor coincide con el filtro." : "Nadie tiene pendientes en este período. <i data-lucide=party-popper class=ico></i> "}</p>`
       }
     </div>
   `;
@@ -2099,7 +2099,7 @@ function pintarInformeContinuidad(contenedor, r, sedes) {
     ${
       gradosSinAuditar.length
         ? `<div class="callout-boletines warn">
-             ⚠ ${gradosSinAuditar.length} grado(s) sin ninguna auditoría todavía (ni P1 ni P2), no se incluyen en los totales de continuidad:
+             <i data-lucide=triangle-alert class=ico></i> ${gradosSinAuditar.length} grado(s) sin ninguna auditoría todavía (ni P1 ni P2), no se incluyen en los totales de continuidad:
              ${gradosSinAuditar.map((g) => g.nombre_grado).join(", ")}.
              Ve a SAPRED → Auditoría para completarlos.
            </div>`
@@ -2123,7 +2123,7 @@ function pintarInformeContinuidad(contenedor, r, sedes) {
             <td>${g.activos_p2}</td>
             <td>${g.posibles_retiros}</td>
             <td>${g.observaciones}</td>
-            <td>P1 ${g.p1_auditado ? "✓" : "—"} · P2 ${g.p2_auditado ? "✓" : "—"}</td>
+            <td>P1 ${g.p1_auditado ? "<i data-lucide=check class=ico></i> " : "—"} · P2 ${g.p2_auditado ? "<i data-lucide=check class=ico></i> " : "—"}</td>
           </tr>`
           )
           .join("")}
@@ -2141,7 +2141,7 @@ function pintarInformeContinuidad(contenedor, r, sedes) {
             <summary>${g.nombre_grado} — ${g.novedades.length} novedad(es)</summary>
             ${
               g.cursos_sin_notas_p2.length
-                ? `<div class="callout-boletines warn">⚠ Curso(s) completos sin ninguna nota en P2 (probable atraso de cargue del docente, no retiro): ${g.cursos_sin_notas_p2.join(", ")}</div>`
+                ? `<div class="callout-boletines warn"><i data-lucide=triangle-alert class=ico></i> Curso(s) completos sin ninguna nota en P2 (probable atraso de cargue del docente, no retiro): ${g.cursos_sin_notas_p2.join(", ")}</div>`
                 : ""
             }
             <div class="tabla-scroll tabla-scroll-alto">
@@ -2170,7 +2170,7 @@ function pintarInformeContinuidad(contenedor, r, sedes) {
     }
 
     <div class="no-imprimir" style="text-align:right; margin-top:14px">
-      <button type="button" class="boton secundario" id="btn-exportar-continuidad">⬇ Exportar a Excel</button>
+      <button type="button" class="boton secundario" id="btn-exportar-continuidad"><i data-lucide=download class=ico></i> Exportar a Excel</button>
     </div>
   `;
 
@@ -2238,14 +2238,14 @@ function renderSapredHub(contenedor) {
     <p class="subtitulo-pagina" style="margin:-8px 0 16px">Integración y comparación con el sistema académico departamental.</p>
     <div id="resultado-importar-sapred">${resultadoImportacionSapred ? resultadoImportarSapredHtml(resultadoImportacionSapred) : ""}</div>
     <div class="hub-sapred">
-      ${tarjetaHubHtml("importar", "📥", "Importar notas", "Incorporar información desde SAPRED (automático o subiendo un PDF)")}
-      ${tarjetaHubHtml("importar", "🔍", "Auditoría", "Comparar la información local con SAPRED, sede por sede")}
-      ${tarjetaHubHtml("generarpdf", "🖨", "Generar boletines por sede", "Un PDF por sede con el boletín de todos sus estudiantes, ordenado por grado, para el docente")}
-      ${tarjetaHubHtml("sincoincidencia", "⚠", "Sin coincidencia", "Registros que SAPRED reporta y que requieren revisión")}
+      ${tarjetaHubHtml("importar", "<i data-lucide=inbox class=ico></i> ", "Importar notas", "Incorporar información desde SAPRED (automático o subiendo un PDF)")}
+      ${tarjetaHubHtml("importar", "<i data-lucide=search class=ico></i> ", "Auditoría", "Comparar la información local con SAPRED, sede por sede")}
+      ${tarjetaHubHtml("generarpdf", "<i data-lucide=printer class=ico></i> ", "Generar boletines por sede", "Un PDF por sede con el boletín de todos sus estudiantes, ordenado por grado, para el docente")}
+      ${tarjetaHubHtml("sincoincidencia", "<i data-lucide=triangle-alert class=ico></i> ", "Sin coincidencia", "Registros que SAPRED reporta y que requieren revisión")}
     </div>
     <p class="pendiente" style="margin-top:14px">
       ¿Buscas la nota real de cada estudiante por área? Eso se ve en
-      <button type="button" class="boton secundario" id="btn-ir-notas-grilla" style="margin-left:6px">📊 Notas → Grilla</button>
+      <button type="button" class="boton secundario" id="btn-ir-notas-grilla" style="margin-left:6px"><i data-lucide=chart-column class=ico></i> Notas → Grilla</button>
     </p>
   `;
   document.getElementById("btn-cerrar-resultado-sapred")?.addEventListener("click", () => {
@@ -2485,7 +2485,7 @@ function pintarFiltrosGeneracion(contenedor, sedes, historial) {
         </details>
       </div>
       <div class="ancho-completo">
-        <button type="submit" class="boton" id="btn-generar-boletines">🖨 Generar boletines</button>
+        <button type="submit" class="boton" id="btn-generar-boletines"><i data-lucide=printer class=ico></i> Generar boletines</button>
       </div>
     </form>
 
@@ -2540,7 +2540,7 @@ function pintarFiltrosGeneracion(contenedor, sedes, historial) {
     } catch (err) {
       alert(err.message || "No se pudo iniciar la generación.");
       boton.disabled = false;
-      boton.textContent = "🖨 Generar boletines";
+      boton.textContent = "Generar boletines";
     }
   });
 }
@@ -2575,7 +2575,7 @@ function enlaceDescargaBoletinSede(corridaId, d) {
   ]
     .filter(Boolean)
     .join(" · ");
-  return `<a class="boton secundario boton-chico" href="${url}" target="_blank" rel="noopener">⬇ PDF</a>${meta ? ` <span class="pendiente" style="font-size:12px">${meta}</span>` : ""}`;
+  return `<a class="boton secundario boton-chico" href="${url}" target="_blank" rel="noopener"><i data-lucide=download class=ico></i> PDF</a>${meta ? ` <span class="pendiente" style="font-size:12px">${meta}</span>` : ""}`;
 }
 
 function pintarProgresoGeneracion(contenedor, a, sedes) {
@@ -2634,9 +2634,9 @@ function pintarProgresoGeneracion(contenedor, a, sedes) {
         : ""
     }
     <div style="text-align:right; margin-top:14px; display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap">
-      ${hayFallos ? `<button type="button" class="boton secundario" id="btn-reintentar-generacion">🔁 Reintentar los grados que faltan</button>` : ""}
-      <button type="button" class="boton secundario" id="btn-nueva-generacion">↻ Empezar de cero</button>
-      ${!terminada ? `<button type="button" class="boton secundario boton-chico" id="btn-cancelar-generacion">✕ Cancelar</button>` : ""}
+      ${hayFallos ? `<button type="button" class="boton secundario" id="btn-reintentar-generacion"><i data-lucide=repeat class=ico></i> Reintentar los grados que faltan</button>` : ""}
+      <button type="button" class="boton secundario" id="btn-nueva-generacion"><i data-lucide=rotate-cw class=ico></i> Empezar de cero</button>
+      ${!terminada ? `<button type="button" class="boton secundario boton-chico" id="btn-cancelar-generacion"><i data-lucide=x class=ico></i> Cancelar</button>` : ""}
     </div>
   `;
 
@@ -2714,7 +2714,7 @@ function historialGeneracionHtml(historial) {
 function filaHistorialImportacionBoletinHtml(h) {
   const fecha = h.importado_en.slice(0, 16).replace("T", " ");
   if (h.error) {
-    return `<tr><td>${fecha}</td><td>${h.nombre_archivo}</td><td colspan="2"><span class="badge-estado alerta">⚠ No se pudo leer: ${h.error}</span></td></tr>`;
+    return `<tr><td>${fecha}</td><td>${h.nombre_archivo}</td><td colspan="2"><span class="badge-estado alerta"><i data-lucide=triangle-alert class=ico></i> No se pudo leer: ${h.error}</span></td></tr>`;
   }
   const cursos = h.bloques.filter((b) => b.reconocido).length;
   const noReconocidos = h.bloques.length - cursos;
@@ -2759,7 +2759,7 @@ function filaHistorialImportacionHtml(h) {
     return `<tr>
       <td>${fecha}</td>
       <td>${h.nombre_archivo}</td>
-      <td colspan="2"><span class="badge-estado alerta">⚠ No se pudo leer: ${h.error}</span></td>
+      <td colspan="2"><span class="badge-estado alerta"><i data-lucide=triangle-alert class=ico></i> No se pudo leer: ${h.error}</span></td>
     </tr>`;
   }
   const cursos = h.bloques.filter((b) => b.reconocido).length;
@@ -2849,7 +2849,7 @@ function pintarListaHistorialAuditorias(contenedor, historial, sedes) {
             <h3 style="margin:0 0 4px">Historial de auditorías SAPRED</h3>
             <p class="pendiente" style="margin:0">Cada vez que corres "Iniciar auditoría" queda un registro acá — puedes volver a verlo cuando quieras, aunque hayan pasado días.</p>
           </div>
-          <button type="button" class="boton secundario boton-chico" id="btn-cerrar-historial-auditorias">✕</button>
+          <button type="button" class="boton secundario boton-chico" id="btn-cerrar-historial-auditorias"><i data-lucide=x class=ico></i> </button>
         </div>
 
         ${
@@ -2897,7 +2897,7 @@ function pintarDetalleAuditoriaModal(contenedor, a, historial, sedes) {
               <span class="badge-estado ${a.estado === "error" ? "alerta" : a.estado === "completada" ? "ok" : "proceso"}">${est.icono} ${est.texto}</span>
             </p>
           </div>
-          <button type="button" class="boton secundario boton-chico" id="btn-cerrar-historial-auditorias">✕</button>
+          <button type="button" class="boton secundario boton-chico" id="btn-cerrar-historial-auditorias"><i data-lucide=x class=ico></i> </button>
         </div>
 
         <div class="no-imprimir resumen-reportes" style="margin-top:12px">
@@ -2938,7 +2938,7 @@ function pintarDetalleAuditoriaModal(contenedor, a, historial, sedes) {
           puedeReintentar
             ? `<div class="no-imprimir callout-boletines" style="margin-top:12px; display:flex; align-items:center; gap:10px; flex-wrap:wrap">
                  <span>${fallidas.length} sede(s)/grado(s) quedaron con advertencia o error.</span>
-                 <button type="button" class="boton" id="btn-reintentar-fallidas">🔁 Reintentar solo los que fallaron</button>
+                 <button type="button" class="boton" id="btn-reintentar-fallidas"><i data-lucide=repeat class=ico></i> Reintentar solo los que fallaron</button>
                </div>`
             : ""
         }
@@ -2946,7 +2946,7 @@ function pintarDetalleAuditoriaModal(contenedor, a, historial, sedes) {
         <div class="no-imprimir" style="display:flex; justify-content:space-between; margin-top:14px">
           <button type="button" class="boton secundario" id="btn-volver-lista-auditorias">◀ Volver a la lista</button>
           <button type="button" class="boton secundario" id="btn-toggle-informe-auditoria">
-            ${mostrarInformeAuditoriaModal ? "Ocultar informe" : "🖨 Ver informe para imprimir / PDF"}
+            ${mostrarInformeAuditoriaModal ? "Ocultar informe" : "<i data-lucide=printer class=ico></i> Ver informe para imprimir / PDF"}
           </button>
         </div>
       </div>
@@ -2982,7 +2982,7 @@ function pintarDetalleAuditoriaModal(contenedor, a, historial, sedes) {
       } catch (err) {
         alert(err.message || "No se pudo lanzar el reintento.");
         btn.disabled = false;
-        btn.textContent = "🔁 Reintentar solo los que fallaron";
+        btn.textContent = "Reintentar solo los que fallaron";
       }
     });
   }
@@ -3119,7 +3119,7 @@ function pintarFiltrosAuditoria(contenedor, sedes, historial) {
     </form>
 
     <div style="margin-top:16px">
-      <button type="button" class="boton secundario" id="btn-ver-historial-auditorias">📋 Ver historial de auditorías</button>
+      <button type="button" class="boton secundario" id="btn-ver-historial-auditorias"><i data-lucide=clipboard-list class=ico></i> Ver historial de auditorías</button>
     </div>
   `;
 
@@ -3258,9 +3258,9 @@ function pintarProgresoAuditoria(contenedor, a, sedes) {
     <div style="text-align:right; margin-top:14px">
       ${
         terminada
-          ? `<button type="button" class="boton" id="btn-ver-conciliacion-auditoria">📊 Ver conciliación SIMAC ↔ SAPRED</button>
+          ? `<button type="button" class="boton" id="btn-ver-conciliacion-auditoria"><i data-lucide=chart-column class=ico></i> Ver conciliación SIMAC <i data-lucide=arrow-left-right class=ico></i> SAPRED</button>
              <button type="button" class="boton secundario" id="btn-ver-pendientes-auditoria">Ver pendientes</button>
-             <button type="button" class="boton secundario" id="btn-ver-historial-auditorias">📋 Ver historial</button>
+             <button type="button" class="boton secundario" id="btn-ver-historial-auditorias"><i data-lucide=clipboard-list class=ico></i> Ver historial</button>
              <button type="button" class="boton secundario" id="btn-nueva-auditoria">Nueva auditoría</button>`
           : `<p class="pendiente" style="text-align:right; margin:0">Puedes cambiar de sección — esto sigue en segundo plano.</p>`
       }
@@ -3288,7 +3288,7 @@ function filaSinCoincidenciaHtml(s) {
     <td>${s.nombre_sapred}</td>
     <td>${s.documento}</td>
     <td>${s.tiene_notas ? '<span class="badge-estado alerta">Sí tiene notas</span>' : '<span class="badge-estado">Sin notas todavía</span>'}</td>
-    <td>${s.resuelto ? '<span class="badge-verif ok">✓ Revisado</span>' : `<button type="button" class="boton secundario boton-chico" data-resolver-sin-coincidencia="${s.id}">Marcar revisado</button>`}</td>
+    <td>${s.resuelto ? '<span class="badge-verif ok"><i data-lucide=check class=ico></i> Revisado</span>' : `<button type="button" class="boton secundario boton-chico" data-resolver-sin-coincidencia="${s.id}">Marcar revisado</button>`}</td>
   </tr>`;
 }
 
@@ -3334,7 +3334,7 @@ async function cargarYPintarSinCoincidencia(contenedor, sedes) {
       registros.length
         ? `<div class="tabla-scroll"><table><thead><tr><th>Sede</th><th>Grado</th><th>Nombre (SAPRED)</th><th>Documento</th><th>¿Tiene notas?</th><th></th></tr></thead>
            <tbody>${registros.map(filaSinCoincidenciaHtml).join("")}</tbody></table></div>`
-        : '<div class="estado-vacio"><div class="estado-vacio-icono">✓</div><h3>Todo coincide</h3><p>Todos los estudiantes que reporta SAPRED coinciden con la base local.</p></div>'
+        : '<div class="estado-vacio"><div class="estado-vacio-icono"><i data-lucide=check class=ico></i> </div><h3>Todo coincide</h3><p>Todos los estudiantes que reporta SAPRED coinciden con la base local.</p></div>'
     }
   `;
 
@@ -3371,9 +3371,9 @@ function filaPendienteModal(p) {
       </div>
       <div style="display:flex; gap:6px; flex-shrink:0">
         <button type="button" class="boton secundario boton-chico" data-toggle-pendiente="${p.id}" data-resuelto="${p.resuelto}">
-          ${p.resuelto ? "↺ Reabrir" : "✓ Marcar resuelto"}
+          ${p.resuelto ? "<i data-lucide=rotate-ccw class=ico></i> Reabrir" : "<i data-lucide=check class=ico></i> Marcar resuelto"}
         </button>
-        <button type="button" class="boton secundario boton-chico" data-eliminar-pendiente="${p.id}" title="Eliminar (ej. si se agregó por error)">🗑</button>
+        <button type="button" class="boton secundario boton-chico" data-eliminar-pendiente="${p.id}" title="Eliminar (ej. si se agregó por error)"></button>
       </div>
     </div>`;
 }
@@ -3432,7 +3432,7 @@ async function abrirModalRevision(g) {
                 · ${estadoBoletinHtml(g)}
               </p>
             </div>
-            <button type="button" class="boton secundario boton-chico" id="btn-informe-grupo">🖨 Informe de este grupo</button>
+            <button type="button" class="boton secundario boton-chico" id="btn-informe-grupo"><i data-lucide=printer class=ico></i> Informe de este grupo</button>
           </div>
 
           ${

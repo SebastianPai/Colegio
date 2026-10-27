@@ -312,6 +312,34 @@ todavía no hay nada que confiar) y descargar el archivo:
 (con "s"). Debe verse el candado sin advertencias — desde ahí "Escanear
 documento" ya puede usar la cámara.
 
+**5. Computadores de la red (modo sin conexión):** en cada PC, entrar una
+vez a `http://<IP-de-este-PC>:8000`, iniciar sesión, abrir **Usar sin wifi**
+y tocar **Instalar en este computador** (descarga `/instalar-pc.cmd`). Ese
+archivo instala el certificado del colegio para el usuario de Windows (sin
+Administrador; Windows pregunta si confía en "IETABA Local CA": Sí) y deja en
+el escritorio el acceso directo **IETABA** a `https://<IP>:8443`. Desde ese
+acceso el PC funciona sin conexión igual que el celular (Chrome y Edge; en
+Firefox hay que activar `security.enterprise_roots.enabled`).
+
+### Qué funciona sin conexión
+
+No hay hosting: el PC servidor tiene la base de datos y los demás
+dispositivos trabajan con su copia y se sincronizan al volver a la red.
+
+- **Ver**: lo último que se abrió en ese dispositivo, más lo descargado con
+  "Usar sin wifi" → Descargar.
+- **Guardar**: cualquier cambio hecho sin red (asistencia, observaciones,
+  ficha, notas…) queda en una cola del dispositivo y se envía solo, en
+  orden, al volver la conexión con la app abierta. Cada envío lleva
+  `X-Id-Operacion` y el servidor recuerda la respuesta
+  (`app/operaciones_cliente.py`, tabla `operaciones_cliente`), así que un
+  reenvío nunca se ejecuta dos veces. Si el servidor rechaza un cambio (por
+  ejemplo, alguien más ya lo modificó), queda marcado en "Usar sin wifi" para
+  reintentarlo o descartarlo.
+- **No** funciona sin conexión lo que depende del servidor en el momento:
+  generar constancias/PDF, importar archivos o la automatización con SAPRED.
+- Pruebas: `./venv/Scripts/python.exe probar_operaciones_cliente.py`.
+
 Si el equipo cambia de IP, repite solo el paso 1 (la CA no cambia, los
 celulares no necesitan reinstalar nada) y vuelve a arrancar el paso 2.
 Para no tener que repetir esto nunca, pídele al encargado de la red del

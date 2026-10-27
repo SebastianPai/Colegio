@@ -20,13 +20,40 @@ def convertir_a_pdf(ruta_docx: Path, ruta_pdf: Path) -> bool:
     """Convierte usando Word (instalado en este PC). Si Word no está
     disponible, devuelve False y el sistema sigue funcionando solo con
     Word (.docx) — la conversión a PDF es un extra, no un requisito."""
+    # Word por COM, en una instancia PROPIA (DispatchEx) que se cierra al
+    # terminar. Antes (docx2pdf) se enganchaba al Word que la persona tuviera
+    # abierto en el PC: si ese Word estaba ocupado o con un aviso abierto, la
+    # conversión fallaba (así quedaban muchas constancias solo en Word) y el
+    # archivo se quedaba abierto y bloqueado en ese Word. Además los endpoints
+    # corren en hilos del servidor, donde COM no está iniciado: se inicia aquí.
     try:
-        from docx2pdf import convert
-
-        convert(str(ruta_docx), str(ruta_pdf))
+        import pythoncom
+        import win32com.client
+    except ImportError:
+        return False
+    pythoncom.CoInitialize()
+    word = documento = None
+    try:
+        word = win32com.client.DispatchEx("Word.Application")
+        word.Visible = False
+        word.DisplayAlerts = 0
+        documento = word.Documents.Open(str(ruta_docx.resolve()), ReadOnly=True, AddToRecentFiles=False)
+        documento.ExportAsFixedFormat(str(ruta_pdf.resolve()), 17)  # 17 = wdExportFormatPDF
         return ruta_pdf.exists()
     except Exception:
         return False
+    finally:
+        try:
+            if documento is not None:
+                documento.Close(False)
+        except Exception:
+            pass
+        try:
+            if word is not None:
+                word.Quit(False)
+        except Exception:
+            pass
+        pythoncom.CoUninitialize()
 
 NIVELES_POR_GRADO = {
     0: "preescolar",
@@ -132,6 +159,97 @@ def generar_constancia(
     # Párrafo "Válido para ..."
     p_valido = parrafos[11]
     _fusionar_runs(p_valido, 0, 3, f"Válido para {proposito}.")
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    return buffer.getvalue()
+
+
+# --- Paz y salvo de servicio social (grado 11) -------------------------------
+# Plantilla: plantillas/paz_y_salvo_servicio_social.docx, copia del Word
+# oficial "PAZ Y SALVO 2026" (certifica las 80 horas de servicio social
+# obligatorio, requisito para el título de bachiller). Igual que la
+# constancia: solo se cambian los runs con datos; membrete, logos, texto
+# legal y firma del rector quedan intactos.
+
+PLANTILLA_PAZ_Y_SALVO = PLANTILLA.parent / "paz_y_salvo_servicio_social.docx"
+PROPOSITO_PAZ_Y_SALVO = "Paz y salvo — servicio social (80 horas)"
+
+# Índices dentro del cuerpo de la plantilla (ver la estructura de runs en
+# generar_paz_y_salvo): párrafo del "Que el estudiante..." y el de la fecha.
+_P_CUERPO_PYS, _P_FECHA_PYS = 5, 7
+_ULTIMO_PARRAFO_PYS = 15  # "Rector IETABA": lo de abajo son renglones vacíos
+
+TIPOS_DOCUMENTO_CORTO = {"C.C.": "C.C", "T.I.": "T.I", "R.C.": "R.C"}
+
+
+def _documento_con_puntos(documento: str) -> str:
+    """'1087185389' -> '1.087.185.389' (como en el formato oficial). Lo que
+    no sea solo dígitos se deja tal cual."""
+    limpio = (documento or "").strip()
+    if not limpio.isdigit():
+        return limpio
+    return f"{int(limpio):,}".replace(",", ".")
+
+
+def _llenar_paz_y_salvo(parrafos, est: dict, fecha: dt.date) -> None:
+    """Runs de la plantilla:
+    cuerpo: [0]'Que el estudiante ' [1]NOMBRE(negrita) [2]' identificado con C.C No: '
+            [3]'1' [4]'.087.185.389 ' [5]'expedida en Tumaco,' [6]'cumplió...'
+    fecha:  [0]'Para constancia se firma a los' [1]' 22 días d' [2]'el mes de octubre del año 2026' [3]'.'"""
+    mujer = (est.get("genero") or "").upper() == "F"
+    tipo = TIPOS_DOCUMENTO_CORTO.get(est.get("tipo_documento") or "", est.get("tipo_documento") or "documento")
+    lugar = (est.get("lugar_expedicion") or "").strip()
+    p = parrafos[_P_CUERPO_PYS]
+    _fusionar_runs(p, 0, 0, "Que la estudiante " if mujer else "Que el estudiante ")
+    _fusionar_runs(p, 1, 1, est["nombre_completo"].upper())
+    _fusionar_runs(p, 2, 2, f" {'identificada' if mujer else 'identificado'} con {tipo} No: ")
+    _fusionar_runs(p, 3, 4, f"{_documento_con_puntos(est['documento'])} " if lugar else f"{_documento_con_puntos(est['documento'])},")
+    _fusionar_runs(p, 5, 5, f"expedida en {lugar}," if lugar else "")
+    p_fecha = parrafos[_P_FECHA_PYS]
+    if fecha.day == 1:  # "a los 1 día" no se dice: "el primer día del mes..."
+        _fusionar_runs(p_fecha, 0, 0, "Para constancia se firma el")
+        _fusionar_runs(p_fecha, 1, 1, " primer día d")
+    else:
+        _fusionar_runs(p_fecha, 1, 1, f" {fecha.day} días d")
+    _fusionar_runs(p_fecha, 2, 2, f"el mes de {MESES_TEXTO[fecha.month]} del año {fecha.year}")
+
+
+def generar_paz_y_salvo(estudiantes: list[dict], fecha_expedicion: dt.date) -> bytes:
+    """Un solo Word con una página por estudiante (el mismo membrete y pie de
+    página en todas). `estudiantes`: dicts con nombre_completo, documento,
+    tipo_documento, lugar_expedicion y genero."""
+    import copy
+
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.text.paragraph import Paragraph
+
+    if not estudiantes:
+        raise ValueError("No hay estudiantes para el paz y salvo.")
+    doc = Document(PLANTILLA_PAZ_Y_SALVO)
+    cuerpo = doc.element.body
+    seccion = cuerpo.find(qn("w:sectPr"))
+    pagina = [e for e in cuerpo if e is not seccion]
+    parrafos_pagina = [e for e in pagina if e.tag == qn("w:p")]
+    # Los renglones vacíos del final empujaban cada página a una hoja de más.
+    pagina = pagina[: pagina.index(parrafos_pagina[_ULTIMO_PARRAFO_PYS]) + 1]
+    for e in list(cuerpo):
+        if e is not seccion:
+            cuerpo.remove(e)
+
+    for i, est in enumerate(estudiantes):
+        elementos = [copy.deepcopy(e) for e in pagina]
+        if i > 0:  # cada estudiante empieza en hoja nueva
+            primero = next(e for e in elementos if e.tag == qn("w:p"))
+            ppr = primero.get_or_add_pPr()
+            # El esquema de Word exige este orden: pStyle, keepNext, keepLines, pageBreakBefore...
+            antes = [c for c in ppr if c.tag in (qn("w:pStyle"), qn("w:keepNext"), qn("w:keepLines"))]
+            ppr.insert(ppr.index(antes[-1]) + 1 if antes else 0, OxmlElement("w:pageBreakBefore"))
+        for e in elementos:
+            seccion.addprevious(e)
+        parrafos = [Paragraph(e, doc._body) for e in elementos if e.tag == qn("w:p")]
+        _llenar_paz_y_salvo(parrafos, est, fecha_expedicion)
 
     buffer = io.BytesIO()
     doc.save(buffer)

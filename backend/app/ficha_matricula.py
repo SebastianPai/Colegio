@@ -21,6 +21,7 @@ from pathlib import Path
 from docx import Document
 from docx.table import Table, _Cell
 
+from . import fechas
 from .models import DIVISIONES_NOMBRES, GRADOS_NOMBRES
 
 PLANTILLA = Path(__file__).resolve().parent.parent / "plantillas" / "ficha_matricula.docx"
@@ -121,6 +122,8 @@ def generar_ficha_matricula(
     fecha_diligenciamiento: dt.date | None = None,
     campos: dict[str, str] | None = None,
     docente: str | None = None,
+    anio_matricula: int | None = None,
+    nuevo: bool = False,
 ) -> bytes:
     doc = Document(PLANTILLA)
     _ajustar_pagina(doc)
@@ -168,22 +171,27 @@ def generar_ficha_matricula(
     # Fecha de ingreso a la institución: no se rastrea (no es lo mismo que la
     # fecha en que se genera esta ficha).
     f1[1][2].text, f1[1][4].text, f1[1][6].text = "", "", ""
-    # Esta ficha es para el año 2027: "GRADO AÑO 2026" = el grado que tiene hoy
-    # en el sistema (número; Preescolar = 0, sin secciones) y "GRADO AÑO 2027"
-    # queda en blanco (a qué grado pasa es otra decisión).
-    _poner_etiqueta(f1[1][7], "GRADO AÑO 2026")
-    _poner_etiqueta(f1[1][9], "GRADO AÑO 2027")
-    f1[1][8].text = str(grado)
-    f1[1][10].text = ""
+    # Renovación (antiguos), ficha del año siguiente: "GRADO AÑO <actual>" = el
+    # grado que tiene hoy en el sistema (número; Preescolar = 0, sin
+    # secciones) y "GRADO AÑO <siguiente>" queda en blanco (a qué grado pasa
+    # es otra decisión). Estudiante nuevo de este año: la ficha es de ESTE
+    # año, su grado va en "GRADO AÑO <actual>" y el del año anterior (otro
+    # colegio) en blanco.
+    anio = anio_matricula or fechas.anio_lectivo_actual() + 1
+    _poner_etiqueta(f1[1][7], f"GRADO AÑO {anio - 1}")
+    _poner_etiqueta(f1[1][9], f"GRADO AÑO {anio}")
+    f1[1][8].text = "" if nuevo else str(grado)
+    f1[1][10].text = str(grado) if nuevo else ""
     # Fila 4 = los valores reales (alumna madre / habla awapit / etnia /
     # situación de antigüedad): ninguno se rastrea, se limpian los que la
     # plantilla trae marcados con "X".
     for idx in (1, 2, 4, 5, 6, 7, 8, 11, 13):
         if idx < len(f1[4]):
             f1[4][idx].text = ""
-    # Todo estudiante que ya está en el sistema es ANTIGUO para 2027.
+    # Todo estudiante que ya está en el sistema es ANTIGUO para el año
+    # siguiente; el recién matriculado este año es NUEVO.
     if len(f1[4]) > 13:
-        f1[4][13].text = "X"
+        f1[4][11 if nuevo else 13].text = "X"
 
     # --- Tabla 2: condiciones de traslado --------------------------------------
     # Ya viene en blanco en la plantilla (nadie marcó nada para el ejemplo

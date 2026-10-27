@@ -16,6 +16,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from . import auth, fechas, models, rbac, schemas, seguridad
+from . import permisos as catalogo
 
 
 class ErrorRBAC(Exception):
@@ -131,6 +132,10 @@ def actualizar_rol(db: Session, rol: models.Rol, datos: schemas.RolActualizar) -
 
 def establecer_permisos_rol(db: Session, rol: models.Rol, codigos: list[str]) -> list[str]:
     permisos_validos = _validar_codigos_permisos(db, codigos)
+    if rol.codigo == catalogo.ROL_TODOS_LOS_PERMISOS:
+        todos = set(db.scalars(select(models.Permiso.codigo)))
+        if {p.codigo for p in permisos_validos} != todos:
+            raise ErrorRBAC("El rol Administrador siempre tiene todos los permisos: no se le pueden quitar.", 400)
 
     def aplicar() -> None:
         db.execute(delete(models.RolPermiso).where(models.RolPermiso.rol_id == rol.id))

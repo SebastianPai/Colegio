@@ -6,12 +6,13 @@ asistencia.py, sección "Módulo docente")."""
 
 import datetime as dt
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from .. import asistencia as asistencia_logica
 from .. import auth, configuracion, crud, datos_ficha, fechas, models, rbac, schemas
 from ..database import get_db
+from . import fotos
 
 router = APIRouter(prefix="/api/docente", tags=["docente"])
 
@@ -220,6 +221,47 @@ def guardar_datos_ficha_estudiante(
         estudiante.lugar_expedicion_documento = lugar
     db.commit()
     return {"campos": datos_ficha.datos_a_campos(fila, estudiante)}
+
+
+@router.get("/tamano-descarga")
+def tamano_descarga_mis_grupos(
+    identidad: auth.Identidad = Depends(rbac.requiere("asistencia.registrar")),
+    db: Session = Depends(get_db),
+):
+    """Peso de «Descargar para usar sin wifi» del docente: los estudiantes de
+    los grupos donde es director (los únicos con ficha completa)."""
+    docente_id = _docente_id_o_error(identidad)
+    anio = fechas.anio_lectivo_actual()
+    estudiantes = {}
+    for c in crud.mis_cursos_docente(db, docente_id, anio):
+        if c.area_id is None:
+            for e in crud.estudiantes_de_grupo_docente(db, c.sede_id, c.grado, c.curso):
+                estudiantes[e.id] = e
+    return crud.resumen_descarga_sin_conexion(db, list(estudiantes.values()))
+
+
+@router.post("/estudiante/{estudiante_id}/fotos")
+async def subir_documento_estudiante(
+    estudiante_id: int,
+    etiqueta: str = Form("Documento"),
+    anio_lectivo: int = Form(default_factory=fechas.anio_lectivo_actual),
+    permanente: bool = Form(False),
+    archivo: UploadFile = File(...),
+    uuid_cliente: str | None = Form(None),
+    reemplaza_id: int | None = Form(None),
+    identidad: auth.Identidad = Depends(rbac.requiere("estudiantes.documentos_grupo")),
+    db: Session = Depends(get_db),
+):
+    """El director de grupo sube los documentos de SUS estudiantes (también
+    desde la cola sin conexión del celular). Mismo alcance que la ficha
+    completa: estudiante_completo_si_es_director."""
+    docente_id = _docente_id_o_error(identidad)
+    estudiante = crud.estudiante_completo_si_es_director(db, docente_id, estudiante_id, fechas.anio_lectivo_actual())
+    if estudiante is None:
+        raise HTTPException(status_code=404, detail="Estudiante no encontrado o no es de tu grupo")
+    return await fotos.guardar_documento(
+        db, estudiante_id, etiqueta, anio_lectivo, permanente, archivo, uuid_cliente, reemplaza_id
+    )
 
 
 # --- Observaciones -------------------------------------------------------------

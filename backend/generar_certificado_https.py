@@ -164,9 +164,34 @@ def generar_certificado_servidor(ca_clave, ca_cert, extras: list[str]):
     return ip_principal, sorted(valores)
 
 
+def nombres_del_certificado_actual() -> list[str]:
+    """IPs y nombres que ya cubre server-cert.pem (sin 'localhost', que
+    siempre se agrega). [] si todavía no hay certificado."""
+    if not SERVER_CERT.exists():
+        return []
+    cert = x509.load_pem_x509_certificate(SERVER_CERT.read_bytes())
+    san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    nombres = [n for n in san.get_values_for_type(x509.DNSName) if n != "localhost"]
+    return nombres + [str(ip) for ip in san.get_values_for_type(x509.IPAddress)]
+
+
 def main():
+    argumentos = sys.argv[1:]
+    if "--si-cambio-ip" in argumentos:
+        # Lo usa iniciar_en_segundo_plano.ps1 en cada arranque: si el router
+        # le dio otra IP a este PC, se renueva el certificado del servidor
+        # SUMANDO la IP nueva a las que ya tenía (y al nombre .local), con la
+        # misma CA, así los celulares que ya la instalaron siguen igual.
+        argumentos = [a for a in argumentos if a != "--si-cambio-ip"]
+        actuales = nombres_del_certificado_actual()
+        ip = detectar_ip_lan()
+        if actuales and ip in actuales:
+            print(f"Certificado HTTPS al día: ya cubre la IP {ip}.")
+            return
+        print(f"La IP de este PC ahora es {ip}: se renueva el certificado HTTPS.")
+        argumentos = actuales + argumentos
     ca_clave, ca_cert = obtener_o_crear_ca()
-    ip_principal, ips = generar_certificado_servidor(ca_clave, ca_cert, sys.argv[1:])
+    ip_principal, ips = generar_certificado_servidor(ca_clave, ca_cert, argumentos)
 
     CA_CERT_PUBLICO.parent.mkdir(parents=True, exist_ok=True)
     CA_CERT_PUBLICO.write_bytes(CA_CERT.read_bytes())

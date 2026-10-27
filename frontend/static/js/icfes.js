@@ -1,17 +1,20 @@
 // --- Vista: Resultados ICFES (Saber 11) entre años -------------------------
 //
-// Tres subvistas:
+// Cuatro subvistas:
 //  - Resumen: cómo le ha ido al colegio año tras año (puntaje global, cada
 //    prueba, niveles de desempeño) y en palabras dónde mejoró y dónde empeoró.
 //  - Estudiantes: la lista de un año, con puesto y prueba más débil.
 //  - Ficha: un estudiante frente al promedio del colegio en su año.
+//  - Reporte por curso: un grupo de hoy (ej. 11-2) con el ICFES de cada
+//    estudiante, imprimible en PDF con el membrete oficial.
 //
-// Datos: /api/icfes/panorama, /api/icfes/anios/{a}/estudiantes y
-// /api/icfes/resultados/{id} (ver backend app/icfes.py). Los carga
+// Datos: /api/icfes/panorama, /api/icfes/anios/{a}/estudiantes,
+// /api/icfes/resultados/{id}, /api/icfes/grupo y /api/icfes/grupo.pdf (ver
+// backend app/icfes.py y app/icfes_pdf.py). Los carga
 // backend/importar_icfes.py desde PRISMA. Los años con muy pocos estudiantes
 // (validantes, pruebas tardías) se muestran pero no se comparan.
 
-let icVista = "resumen"; // resumen | estudiantes | ficha
+let icVista = "resumen"; // resumen | estudiantes | ficha | grupo
 let icAnio = null;
 let icResultadoId = null;
 let icMedida = "promedio"; // promedio | percentil (gráfica por prueba)
@@ -20,6 +23,14 @@ let icBuscar = "";
 let icOrden = "puesto";
 let icPanorama = null;
 let icCharts = [];
+// --- Reporte por curso: por defecto 11-2 de la sede principal, como pidió
+// secretaría; los selectores permiten cualquier sede/grado/división.
+let icSedes = null;
+let icGrupoSedeId = null;
+let icGrupoGrado = 11;
+let icGrupoCurso = 2;
+let icGrupoDivisiones = [];
+let icGrupoDatos = null;
 
 // Series en orden fijo (validado con el verificador de paletas, modo claro):
 // una prueba siempre tiene el mismo color en todas las gráficas.
@@ -102,9 +113,9 @@ async function renderIcfes() {
   }
 
   app.innerHTML = `${cab}
-    <div class="segmentado anz-subnav" role="group" aria-label="Sección">
-      ${[["resumen", "Resumen general"], ["estudiantes", "Estudiantes por año"], ["ficha", "Ficha individual"]]
-        .map(([id, n]) => `<button type="button" class="segmentado-btn ${icVista === id ? "activo" : ""}" data-ic-vista="${id}" aria-pressed="${icVista === id}">${n}</button>`)
+    <div class="segmentado anz-subnav ic-subnav" role="group" aria-label="Sección">
+      ${[["resumen", "Resumen general", "bar-chart-3"], ["estudiantes", "Estudiantes por año", "users"], ["ficha", "Ficha individual", "user"], ["grupo", "Reporte por curso", "printer"]]
+        .map(([id, n, ico]) => `<button type="button" class="segmentado-btn ${icVista === id ? "activo" : ""}" data-ic-vista="${id}" aria-pressed="${icVista === id}">${icono(ico)} ${n}</button>`)
         .join("")}
     </div>
     <div id="ic-contenido" aria-live="polite"></div>`;
@@ -117,7 +128,8 @@ async function renderIcfes() {
   );
   if (icVista === "resumen") icPintarResumen();
   else if (icVista === "estudiantes") await icPintarEstudiantes();
-  else await icPintarFicha();
+  else if (icVista === "ficha") await icPintarFicha();
+  else await icPintarGrupo();
 }
 
 function icIrA(vista, cambios = {}) {
@@ -400,6 +412,16 @@ function icChartNiveles(comparables) {
   c.parentElement.style.height = `${Math.max(180, comparables.length * 34 + 70)}px`;
 }
 
+// Chips de colores de los niveles (los mismos de las tablas).
+function icLeyendaNivelesHtml() {
+  const P = icPanorama;
+  return P.pruebas.slice(0, 1).concat(P.pruebas.filter((p) => p.codigo === "ing")).map((p) =>
+    `<span class="ic-leyenda-grupo">${p.codigo === "ing" ? "Inglés:" : "Demás pruebas:"} ${p.niveles.map((n) => {
+      const col = icColorNivel(p.codigo, n);
+      return `<span class="ic-chip-nivel" style="background:${col.fondo};color:${col.tinta}">${icNombreNivel(p.codigo, n)}</span>`;
+    }).join(" ")}</span>`).join("");
+}
+
 // --- Estudiantes por año -----------------------------------------------------
 
 async function icPintarEstudiantes() {
@@ -459,12 +481,6 @@ async function icPintarEstudiantes() {
     });
   };
 
-  const leyenda = P.pruebas.slice(0, 1).concat(P.pruebas.filter((p) => p.codigo === "ing")).map((p) =>
-    `<span class="ic-leyenda-grupo">${p.codigo === "ing" ? "Inglés:" : "Demás pruebas:"} ${p.niveles.map((n) => {
-      const col = icColorNivel(p.codigo, n);
-      return `<span class="ic-chip-nivel" style="background:${col.fondo};color:${col.tinta}">${icNombreNivel(p.codigo, n)}</span>`;
-    }).join(" ")}</span>`).join("");
-
   host.innerHTML = `
     ${selector}
     ${!r.comparable ? `<p class="ic-nota">${icono("info")} En ${r.anio} solo hay ${r.n} estudiante(s): no se usa en las comparaciones entre años.</p>` : ""}
@@ -477,7 +493,7 @@ async function icPintarEstudiantes() {
     </div>
     <div class="ic-barra-est">
       <input type="search" id="ic-buscar" placeholder="Buscar por nombre o número de registro" value="${esc(icBuscar)}" aria-label="Buscar estudiante">
-      <div class="ic-leyenda">${leyenda}</div>
+      <div class="ic-leyenda">${icLeyendaNivelesHtml()}</div>
     </div>
     <div id="ic-tabla-est"></div>
     <p class="ic-nota">El color de cada puntaje es su nivel de desempeño del ICFES. "Más débil" es la prueba en la que el estudiante queda más por debajo del promedio del colegio. Clic en un estudiante para ver su ficha.</p>`;
@@ -576,4 +592,230 @@ async function icPintarFicha() {
       scales: { y: { ...IC_EJE, min: 0, max: 100 }, x: { grid: { display: false }, ticks: { color: "#344054" } } },
     },
   }));
+}
+
+// --- Reporte por curso -------------------------------------------------------
+//
+// Un grupo de hoy (por defecto 11-2 de la sede principal) con el ICFES de cada
+// estudiante activo. Se imprime en PDF con el membrete oficial (backend
+// app/icfes_pdf.py): el reporte del curso, las hojas individuales de todos o
+// la de un solo estudiante. Cambiar sede, grado o división recarga solo.
+
+function icQueryGrupo() {
+  return `sede_id=${icGrupoSedeId}&grado=${icGrupoGrado}` + (icGrupoCurso != null ? `&curso=${icGrupoCurso}` : "");
+}
+
+// Divisiones que de verdad existen en esa sede y grado (si no hay permiso de
+// sedes, se ofrecen 1 a 6).
+async function icCargarDivisiones() {
+  try {
+    const grados = await api(`/api/sedes/${icGrupoSedeId}/grados`);
+    icGrupoDivisiones = (grados.find((g) => g.grado === icGrupoGrado)?.divisiones || []).map((d) => d.numero);
+  } catch {
+    icGrupoDivisiones = [1, 2, 3, 4, 5, 6];
+  }
+  if (!icGrupoDivisiones.length) icGrupoCurso = null;
+  else if (icGrupoCurso != null && !icGrupoDivisiones.includes(icGrupoCurso)) icGrupoCurso = icGrupoDivisiones[0];
+}
+
+async function icPintarGrupo() {
+  const host = document.getElementById("ic-contenido");
+  if (!icSedes) {
+    host.innerHTML = '<p class="estado-carga">Cargando el grupo...</p>';
+    try { icSedes = await api("/api/sedes"); } catch { icSedes = []; }
+    if (icGrupoSedeId === null) icGrupoSedeId = (icSedes.find((s) => s.id === 1) || icSedes[0])?.id ?? 1;
+    await icCargarDivisiones();
+  }
+  const opcSede = icSedes.length
+    ? icSedes.map((s) => `<option value="${s.id}" ${s.id === icGrupoSedeId ? "selected" : ""}>${esc(s.nombre)}</option>`).join("")
+    : `<option value="${icGrupoSedeId}">Sede principal</option>`;
+  const opcGrado = NOMBRES_GRADOS.map(([n, t]) => `<option value="${n}" ${n === icGrupoGrado ? "selected" : ""}>${t}</option>`).join("");
+  const opcCurso = icGrupoDivisiones.length
+    ? icGrupoDivisiones.map((n) => `<option value="${n}" ${n === icGrupoCurso ? "selected" : ""}>${n}</option>`).join("")
+      + `<option value="" ${icGrupoCurso == null ? "selected" : ""}>Todas</option>`
+    : '<option value="" selected>Sin división</option>';
+
+  host.innerHTML = `
+    <div class="barra-filtros ic-grupo-filtros">
+      <label class="filtro-campo">Sede<select id="ic-grupo-sede">${opcSede}</select></label>
+      <label class="filtro-campo">Grado<select id="ic-grupo-grado">${opcGrado}</select></label>
+      <label class="filtro-campo">División<select id="ic-grupo-curso">${opcCurso}</select></label>
+      <div class="ic-grupo-acciones">
+        <button type="button" class="boton" id="ic-pdf-curso" disabled>${icono("printer")} Reporte del curso</button>
+        <button type="button" class="boton secundario" id="ic-pdf-individuales" disabled>${icono("files")} Hojas individuales</button>
+      </div>
+    </div>
+    <div id="ic-grupo-aviso" aria-live="polite"></div>
+    <div id="ic-grupo-cuerpo"><p class="estado-carga">Cargando el grupo...</p></div>`;
+
+  const recargar = async (cambiaGrupo) => {
+    if (cambiaGrupo) await icCargarDivisiones();
+    icGrupoDatos = null;
+    icPintarGrupo();
+  };
+  host.querySelector("#ic-grupo-sede").addEventListener("change", (e) => { icGrupoSedeId = Number(e.target.value); recargar(true); });
+  host.querySelector("#ic-grupo-grado").addEventListener("change", (e) => { icGrupoGrado = Number(e.target.value); recargar(true); });
+  host.querySelector("#ic-grupo-curso").addEventListener("change", (e) => { icGrupoCurso = e.target.value === "" ? null : Number(e.target.value); recargar(false); });
+  host.querySelector("#ic-pdf-curso").addEventListener("click", (e) => icAbrirPdf(`/api/icfes/grupo.pdf?${icQueryGrupo()}&formato=curso`, e.currentTarget));
+  host.querySelector("#ic-pdf-individuales").addEventListener("click", (e) => icAbrirPdf(`/api/icfes/grupo.pdf?${icQueryGrupo()}&formato=individual`, e.currentTarget));
+  if (window.lucide?.createIcons) lucide.createIcons();
+
+  const cuerpo = document.getElementById("ic-grupo-cuerpo");
+  if (!icGrupoDatos) {
+    try {
+      icGrupoDatos = await api(`/api/icfes/grupo?${icQueryGrupo()}`);
+    } catch (e) {
+      cuerpo.innerHTML = `<div class="alerta-caja">No se pudo cargar el grupo: ${esc(e.message)}</div>`;
+      return;
+    }
+  }
+  // Si el servidor sigue con el código anterior (no se reinició tras actualizar),
+  // la respuesta no trae el resumen: se avisa en vez de quedarse "Cargando".
+  if (!icGrupoDatos.resumen_pruebas) {
+    icGrupoDatos = null;
+    cuerpo.innerHTML = `<div class="alerta-caja">${IC_AVISO_REINICIO}</div>`;
+    return;
+  }
+  try {
+    icPintarCuerpoGrupo();
+  } catch (e) {
+    cuerpo.innerHTML = `<div class="alerta-caja">No se pudo mostrar el grupo: ${esc(e.message)}</div>`;
+  }
+}
+
+const IC_AVISO_REINICIO =
+  "El servidor todavía tiene la versión anterior del sistema. Hay que reiniciarlo (detener e iniciar el servidor en el PC de secretaría) para usar el reporte por curso.";
+
+function icPintarCuerpoGrupo() {
+  const d = icGrupoDatos;
+  const cuerpo = document.getElementById("ic-grupo-cuerpo");
+  const P = icPanorama;
+  const etiqueta = `${d.nombre_grupo}`;
+  document.getElementById("ic-pdf-curso").disabled = !d.total;
+  document.getElementById("ic-pdf-individuales").disabled = !d.con_resultado;
+
+  if (!d.total) {
+    cuerpo.innerHTML = `<div class="ox-vacio"><p><b>No hay estudiantes activos en ${esc(etiqueta)}.</b></p><p>Pruebe con otra sede, grado o división.</p></div>`;
+    return;
+  }
+
+  const con = d.estudiantes.filter((f) => f.resultado);
+  const sin = d.estudiantes.filter((f) => !f.resultado);
+  const difGlobal = d.promedio_global !== null && d.colegio_global !== null ? d.promedio_global - d.colegio_global : null;
+  const conBajo = P.pruebas.map((p) => [p, d.resumen_pruebas[p.codigo]]).filter(([, v]) => v.pct_nivel_bajo !== null);
+  const critica = conBajo.length ? conBajo.reduce((a, b) => (b[1].pct_nivel_bajo > a[1].pct_nivel_bajo ? b : a)) : null;
+
+  const kpis = `<div class="anz-kpis">
+    <div class="anz-kpi">
+      <span class="anz-kpi-etq">Estudiantes de ${esc(etiqueta)}</span>
+      <b class="anz-kpi-valor">${d.con_resultado}<small> de ${d.total}</small></b>
+      <span class="anz-kpi-sub">con resultado ICFES${d.anios.length ? ` (${d.anios.join(", ")})` : ""}${d.sin_resultado ? ` · ${d.sin_resultado} sin resultado` : ""}</span>
+    </div>
+    ${d.con_resultado ? `<div class="anz-kpi">
+      <span class="anz-kpi-etq">Puntaje global promedio ${iconoAyuda("Promedio del puntaje global (0 a 500) de los estudiantes del grupo que tienen resultado. Se compara con el promedio de todo el colegio en el mismo año.")}</span>
+      <b class="anz-kpi-valor">${icF(d.promedio_global)}</b>
+      <span class="anz-kpi-explica">Colegio ${d.colegio_anio}: ${icF(d.colegio_global)}${difGlobal !== null ? ` · <span class="ic-cambio ${difGlobal >= 5 ? "sube" : difGlobal <= -5 ? "baja" : "igual"}">${icS(difGlobal)}</span>` : ""}</span>
+    </div>` : ""}
+    ${critica ? `<div class="anz-kpi">
+      <span class="anz-kpi-etq">Prueba que más preocupa</span>
+      <b class="anz-kpi-valor">${esc(critica[0].nombre)}</b>
+      <span class="anz-kpi-explica"><b>${critica[1].pct_nivel_bajo}%</b> del grupo quedó en el nivel más bajo; promedio ${icF(critica[1].promedio)} (colegio ${icF(critica[1].colegio)}).</span>
+    </div>` : ""}
+  </div>`;
+
+  const aproximadas = d.aproximadas
+    ? `<p class="ic-nota">${icono("alert-triangle")}<span>${d.aproximadas} estudiante(s) tienen el nombre escrito distinto en el ICFES; su resultado se asoció por parecido del nombre y se marca con <span class="ic-aprox">nombre en ICFES</span>. Conviene verificarlo con el registro ICFES antes de entregar.</span></p>`
+    : "";
+
+  const celda = (f, p) => {
+    const v = f.resultado.pruebas[p.codigo];
+    if (v.puntaje === null) return '<td class="ic-celda-nivel">—</td>';
+    const col = icColorNivel(p.codigo, v.nivel);
+    return `<td class="ic-celda-nivel"><span class="ic-chip-nivel" style="background:${col.fondo};color:${col.tinta}" title="${icNombreNivel(p.codigo, v.nivel)} · percentil nacional ${v.percentil ?? "—"}">${v.puntaje}</span></td>`;
+  };
+  const tabla = con.length ? `
+    <section class="ic-bloque">
+      <div class="ic-bloque-cab">
+        <div>
+          <h2>Resultados por estudiante</h2>
+          <p class="ic-bloque-desc">Ordenados por puntaje global. El color es el nivel de desempeño del ICFES. Clic en un nombre para ver su ficha ICFES.</p>
+        </div>
+        <div class="ic-leyenda">${icLeyendaNivelesHtml()}</div>
+      </div>
+      <div class="tabla-scroll"><table class="ox-tabla anz-tabla ic-tabla-est">
+        <thead><tr><th>Puesto</th><th>Estudiante</th><th>Global</th>
+          ${P.pruebas.map((p) => `<th title="${esc(p.nombre)}">${p.codigo.toUpperCase()}</th>`).join("")}
+          <th class="no-imprimir"><span class="sr-only">Imprimir</span></th></tr></thead>
+        <tbody>${con.map((f) => `<tr class="ic-fila" data-ic-resultado="${f.resultado.id}" tabindex="0">
+          <td>${f.puesto ?? "—"}</td>
+          <td><b>${esc(f.nombre)}</b><br><span class="ic-sub">${esc(f.documento || "")}${f.aproximada ? ` · <span class="ic-aprox" title="Nombre tal como figura en el ICFES">${esc(f.resultado.nombre_icfes)}</span>` : ""}</span></td>
+          <td><b>${f.resultado.puntaje_global ?? "—"}</b></td>
+          ${P.pruebas.map((p) => celda(f, p)).join("")}
+          <td class="no-imprimir"><button type="button" class="boton-icono" data-ic-hoja="${f.estudiante_id}" title="Imprimir la hoja individual de ${esc(f.nombre)}" aria-label="Imprimir hoja individual de ${esc(f.nombre)}">${icono("printer")}</button></td>
+        </tr>`).join("")}</tbody>
+      </table></div>
+    </section>` : `<div class="ox-vacio"><p><b>Ningún estudiante de ${esc(etiqueta)} tiene resultado ICFES todavía.</b></p></div>`;
+
+  const sinHtml = sin.length ? `
+    <section class="ic-bloque">
+      <h2>Sin resultado ICFES (${sin.length})</h2>
+      <p class="ic-bloque-desc">No se encontró un resultado con el nombre de estos estudiantes: puede que no hayan presentado la prueba o que el ICFES tenga el nombre escrito muy distinto.</p>
+      <ul class="ic-sin-lista">${sin.map((f) => `<li><button type="button" class="ic-link" data-ic-ficha-est="${f.estudiante_id}">${esc(f.nombre)}</button><span class="ic-sub">${esc(f.documento || "")}</span></li>`).join("")}</ul>
+    </section>` : "";
+
+  cuerpo.innerHTML = kpis + aproximadas + tabla + sinHtml;
+
+  cuerpo.querySelectorAll("[data-ic-resultado]").forEach((tr) => {
+    const abrir = () => icIrA("ficha", { resultado: Number(tr.dataset.icResultado) });
+    tr.addEventListener("click", (ev) => { if (!ev.target.closest("[data-ic-hoja]")) abrir(); });
+    tr.addEventListener("keydown", (ev) => ev.key === "Enter" && ev.target === tr && abrir());
+  });
+  cuerpo.querySelectorAll("[data-ic-hoja]").forEach((b) => b.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    icAbrirPdf(`/api/icfes/grupo.pdf?${icQueryGrupo()}&formato=individual&estudiante_id=${b.dataset.icHoja}`, b);
+  }));
+  cuerpo.querySelectorAll("[data-ic-ficha-est]").forEach((b) => b.addEventListener("click", () => abrirFicha(Number(b.dataset.icFichaEst), "icfes")));
+  if (window.lucide?.createIcons) lucide.createIcons();
+}
+
+// Abre el PDF (membrete oficial) en una pestaña nueva. La pestaña se abre YA,
+// dentro del clic, para que el bloqueador de ventanas no la corte; si aun así
+// se bloquea, el PDF se descarga. Los errores salen como aviso en la pantalla.
+async function icAbrirPdf(url, boton) {
+  const aviso = document.getElementById("ic-grupo-aviso");
+  if (aviso) aviso.innerHTML = "";
+  const htmlOriginal = boton.innerHTML;
+  boton.disabled = true;
+  if (!boton.classList.contains("boton-icono")) boton.textContent = "Generando PDF…";
+  const ventana = window.open("", "_blank");
+  try {
+    await asegurarSesionFresca();
+    let res = await fetch(url);
+    if (res.status === 401 && (await _intentarRefresh())) res = await fetch(url);
+    if (!res.ok) {
+      if (res.status === 404) throw new Error(IC_AVISO_REINICIO);
+      const detalle = await res.json().catch(() => ({}));
+      throw new Error(detalle.detail || `Error ${res.status} generando el PDF`);
+    }
+    const objUrl = URL.createObjectURL(await res.blob());
+    if (ventana) {
+      ventana.location = objUrl;
+    } else {
+      const nombre = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") || "");
+      const a = document.createElement("a");
+      a.href = objUrl;
+      a.download = nombre ? nombre[1] : "reporte_icfes.pdf";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+    setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
+  } catch (e) {
+    if (ventana) ventana.close();
+    if (aviso) aviso.innerHTML = `<div class="alerta-caja">${esc(e.message || "No se pudo generar el PDF.")}</div>`;
+  } finally {
+    boton.disabled = false;
+    boton.innerHTML = htmlOriginal;
+    if (window.lucide?.createIcons) lucide.createIcons();
+  }
 }

@@ -2,9 +2,19 @@
 <html lang="es">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>IETABA</title>
-  <link rel="stylesheet" href="/static/style.css?v=g11" />
+  <!-- App instalable ("Agregar a pantalla de inicio") y uso sin conexión:
+       ver sw.js y static/js/sin_conexion.js. -->
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="theme-color" content="#1d4ed8" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png?v=2" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png?v=2" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="IETABA" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <link rel="stylesheet" href="/static/style.css?v=g34t" />
   <!-- Fase 4.0: estilos de las pantallas de autenticación. No se tocó
        style.css (fuera del alcance permitido para esta fase); se reutilizan
        las variables y clases (.form-grid, .boton, .alerta-caja) que ya
@@ -116,6 +126,9 @@
         <img src="/static/logos/logo2.jpeg" alt="" class="marca-logo" />
         <strong>IETABA</strong>
       </div>
+      <!-- En el celular el menú lateral está escondido: el acceso a «Usar sin
+           wifi» va también aquí arriba (sin_conexion.js lo muestra al entrar). -->
+      <button type="button" id="btn-sin-wifi-movil" class="topbar-movil-wifi" aria-label="Usar sin wifi" title="Usar sin wifi" hidden><i data-lucide=wifi-off class=ico></i><span>Sin wifi</span></button>
     </header>
 
     <div id="sidebar-overlay" class="sidebar-overlay no-imprimir" hidden></div>
@@ -140,10 +153,10 @@
         </div>
         <div class="nav-grupo">
           <span class="nav-grupo-titulo">Docencia</span>
-          <button data-vista="docente" data-dk-vista="inicio" class="tab" data-permiso="asistencia.registrar">Inicio</button>
-          <button data-vista="docente" data-dk-vista="cursos" class="tab" data-permiso="asistencia.registrar">Mis cursos</button>
-          <button data-vista="docente" data-dk-vista="asistencia-elegir" class="tab" data-permiso="asistencia.registrar">Asistencia</button>
-          <button data-vista="docente" data-dk-vista="historial" class="tab" data-permiso="asistencia.ver_propia">Historial</button>
+          <button data-vista="docente" data-dk-vista="inicio" class="tab" data-permiso="asistencia.registrar" data-requiere-docente>Inicio</button>
+          <button data-vista="docente" data-dk-vista="cursos" class="tab" data-permiso="asistencia.registrar" data-requiere-docente>Mis cursos</button>
+          <button data-vista="docente" data-dk-vista="asistencia-elegir" class="tab" data-permiso="asistencia.registrar" data-requiere-docente>Asistencia</button>
+          <button data-vista="docente" data-dk-vista="historial" class="tab" data-permiso="asistencia.ver_propia" data-requiere-docente>Historial</button>
         </div>
         <div class="nav-grupo">
           <span class="nav-grupo-titulo">Orientación</span>
@@ -179,6 +192,7 @@
           <span id="cuenta-usuario-rol"></span>
           <button type="button" id="btn-logout" class="boton-texto-chico">Cerrar sesión</button>
         </div>
+        <button type="button" id="btn-sin-wifi" class="sc-boton-menu" hidden><i data-lucide=wifi-off class=ico></i> Usar sin wifi</button>
         <button type="button" id="btn-colapsar-sidebar" class="sidebar-colapsar-btn" aria-label="Colapsar menú" aria-expanded="true" title="Colapsar menú">
           <span aria-hidden="true">«</span> <span class="sidebar-colapsar-texto">Colapsar</span>
         </button>
@@ -194,27 +208,28 @@
        index.html nuevo (donde .app-shell arranca oculto) — esa combinación
        deja la pantalla de "Cargando…" fija para siempre. -->
   <script src="/static/vendor/lucide.min.js"></script>
-  <script src="/static/js/comun.js?v=g8"></script>
-  <script src="/static/js/auth.js?v=g8"></script>
+  <script src="/static/js/comun.js?v=g9"></script>
+  <script src="/static/js/auth.js?v=g10"></script>
   <script src="/static/js/core.js?v=g11"></script>
   <script src="/static/js/sedes.js?v=g8"></script>
-  <script src="/static/js/reportes.js?v=g8"></script>
-  <script src="/static/js/estudiantes.js?v=g8"></script>
-  <script src="/static/js/agregar.js?v=g8"></script>
-  <script src="/static/js/constancias.js?v=g8"></script>
-  <script src="/static/js/boletines.js?v=g8"></script>
+  <script src="/static/js/reportes.js?v=g14"></script>
+  <script src="/static/js/estudiantes.js?v=g10"></script>
+  <script src="/static/js/agregar.js?v=g9"></script>
+  <script src="/static/js/constancias.js?v=g9"></script>
+  <script src="/static/js/boletines.js?v=g10"></script>
   <script src="/static/js/horario.js?v=g8"></script>
   <script src="/static/js/horario_consulta.js?v=g8"></script>
-  <script src="/static/js/scanner.js?v=g8"></script>
-  <script src="/static/js/ficha.js?v=g8"></script>
+  <script src="/static/js/scanner.js?v=g9"></script>
+  <script src="/static/js/ficha.js?v=g26"></script>
   <script src="/static/js/admin.js?v=g8"></script>
   <script src="/static/js/alertas.js?v=g8"></script>
   <script src="/static/js/asistencia.js?v=g8"></script>
   <script src="/static/vendor/chart.umd.min.js"></script>
   <script src="/static/js/analisis.js?v=g12"></script>
-  <script src="/static/js/icfes.js?v=g12"></script>
-  <script src="/static/js/docente.js?v=g8"></script>
+  <script src="/static/js/icfes.js?v=g15"></script>
+  <script src="/static/js/docente.js?v=g9"></script>
   <script src="/static/js/orientacion.js?v=g8"></script>
+  <script src="/static/js/sin_conexion.js?v=g10"></script>
   <script src="/static/js/main.js?v=g8"></script>
 </body>
 </html>

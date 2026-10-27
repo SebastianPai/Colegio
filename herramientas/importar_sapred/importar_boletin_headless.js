@@ -21,6 +21,7 @@ const {
   abrirNavegadorSapred,
   abrirPestanaReporteBoletin,
   generarYExtraerBoletinTodasJornadas,
+  leerPeriodosYGrados,
 } = require("./sapred_core.js");
 const SEDES_SAPRED = require("./config_sedes.json");
 
@@ -45,9 +46,17 @@ async function reportarProgreso(apiBase, auditId, datos) {
   const args = leerArgs();
   const auditId = args["audit-id"];
   const apiBase = args["api-base"] || "http://127.0.0.1:8000";
-  const periodoNum = args.periodo === "1" ? "1" : "2";
-  const periodoTexto = periodoNum === "1" ? "PRIMER PERIODO" : "SEGUNDO PERIODO";
-  const gradoFiltro = args.grado ? Number(args.grado) : null;
+  let periodos, gradosAProcesar;
+  try {
+    ({ periodos, grados: gradosAProcesar } = leerPeriodosYGrados(args));
+  } catch (e) {
+    console.error(e.message);
+    process.exit(1);
+  }
+  // Con varios periodos, cada etiqueta lleva el suyo: "SEDE (SEPTIMO · periodo 3)"
+  // (sapred_auditoria.py la lee así para reintentar solo lo que falló).
+  const variosPeriodos = periodos.length > 1;
+  const etiqueta = (item) => `${item.sedeNombreDB} (${item.grado.sapred}${variosPeriodos ? ` · periodo ${item.periodo.numero}` : ""})`;
   const sedeIdsFiltro = args.sedes ? args.sedes.split(",").map(Number) : null;
 
   if (!auditId) {
@@ -63,9 +72,7 @@ async function reportarProgreso(apiBase, auditId, datos) {
       sedeIdPorNombre[s.nombre] = s.id;
     });
 
-    const gradosAProcesar = gradoFiltro !== null ? GRADOS.filter((g) => g.numero === gradoFiltro) : GRADOS;
-
-    const plan = [];
+    const base = [];
     for (const grado of gradosAProcesar) {
       // Fase 4.1: ruta reducida (solo sede_id + cantidad, sin datos
       // personales) — es endpoint interno, exige identidad de servicio.
@@ -78,9 +85,11 @@ async function reportarProgreso(apiBase, auditId, datos) {
         const sedeId = sedeIdPorNombre[nombreDB];
         if (!conteoPorSede[sedeId]) continue;
         if (sedeIdsFiltro && !sedeIdsFiltro.includes(sedeId)) continue;
-        plan.push({ grado, sedeSapred, sedeId, sedeNombreDB: nombreDB, estudiantesEsperados: conteoPorSede[sedeId] });
+        base.push({ grado, sedeSapred, sedeId, sedeNombreDB: nombreDB, estudiantesEsperados: conteoPorSede[sedeId] });
       }
     }
+    // Periodo por periodo: todas las sedes y grados de uno, luego el siguiente.
+    const plan = periodos.flatMap((periodo) => base.map((item) => ({ ...item, periodo })));
 
     await reportarProgreso(apiBase, auditId, { estado: "esperando_login", sedes_totales: plan.length });
 
@@ -108,7 +117,7 @@ async function reportarProgreso(apiBase, auditId, datos) {
     for (const item of plan) {
       await reportarProgreso(apiBase, auditId, {
         sede_actual: item.sedeNombreDB,
-        grado_actual: item.grado.sapred,
+        grado_actual: variosPeriodos ? `${item.grado.sapred} · P${item.periodo.numero}` : item.grado.sapred,
       });
 
       let intentos = 0;
@@ -119,7 +128,7 @@ async function reportarProgreso(apiBase, auditId, datos) {
         try {
           if (!(await estaLogueado(page))) throw new Error("la sesión se cerró");
           const bloques = await generarYExtraerBoletinTodasJornadas(
-            page, frame, context, item.sedeSapred, item.grado.sapred, periodoTexto
+            page, frame, context, item.sedeSapred, item.grado.sapred, item.periodo.texto
           );
           bloques.forEach((bl) => {
             bl.sede_id = item.sedeId;
@@ -130,18 +139,19 @@ async function reportarProgreso(apiBase, auditId, datos) {
             await reportarProgreso(apiBase, auditId, {
               sedes_completadas: 1,
               detalle_sede: {
-                sede: `${item.sedeNombreDB} (${item.grado.sapred})`,
+                sede: etiqueta(item),
                 estado: "advertencia",
                 detalle: `El boletín no devolvió estudiantes. La base local registra ${item.estudiantesEsperados} en este grado.`,
               },
             });
           } else {
-            if (!bloquesPorGrado.has(item.grado.numero)) bloquesPorGrado.set(item.grado.numero, []);
-            bloquesPorGrado.get(item.grado.numero).push(...bloques);
+            const clave = `${item.periodo.numero}|${item.grado.numero}`;
+            if (!bloquesPorGrado.has(clave)) bloquesPorGrado.set(clave, []);
+            bloquesPorGrado.get(clave).push(...bloques);
             await reportarProgreso(apiBase, auditId, {
               sedes_completadas: 1,
               estudiantes_revisados_delta: totalEst,
-              detalle_sede: { sede: `${item.sedeNombreDB} (${item.grado.sapred})`, estado: "completada" },
+              detalle_sede: { sede: etiqueta(item), estado: "completada" },
             });
           }
           ok = true;
@@ -154,7 +164,7 @@ async function reportarProgreso(apiBase, auditId, datos) {
         await reportarProgreso(apiBase, auditId, {
           sedes_completadas: 1,
           detalle_sede: {
-            sede: `${item.sedeNombreDB} (${item.grado.sapred})`,
+            sede: etiqueta(item),
             estado: "error",
             detalle: ultimoError ? ultimoError.message : "error desconocido",
           },

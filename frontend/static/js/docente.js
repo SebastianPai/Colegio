@@ -617,6 +617,7 @@ let dkRendimientoActual = null; // GET /api/docente/estudiante/{id}/rendimiento 
 let dkMostrarFormObs = false;
 let dkGuardandoObs = false;
 let dkErrorObs = null;
+let dkAvisoObsEnCola = null;
 
 async function renderDkPerfil() {
   if (!dkEstudianteSel) return dkVolver("cursos");
@@ -648,6 +649,7 @@ async function renderDkPerfil() {
   dkPerfilActual = e;
   dkMostrarFormObs = false;
   dkErrorObs = null;
+  dkAvisoObsEnCola = null;
   dkPintarPerfil(e, observaciones, observacionesError);
 }
 
@@ -739,6 +741,7 @@ function dkObservacionesHtml(observaciones, observacionesError) {
         ${tienePermiso("observaciones.crear") ? '<button type="button" class="boton dk-boton-secundario" id="dk-nueva-obs">+ Nueva observación</button>' : ""}
       </div>
       ${dkErrorObs ? `<p class="alerta-caja">${esc(dkErrorObs)}</p>` : ""}
+      ${dkAvisoObsEnCola ? `<p class="exito-caja"><i data-lucide=cloud-upload class=ico></i> ${esc(dkAvisoObsEnCola)}</p>` : ""}
       <form id="form-dk-obs" class="form-grid dk-obs-form" ${dkMostrarFormObs ? "" : "hidden"}>
         <label>Tipo
           <select name="tipo" id="dk-obs-tipo">
@@ -787,6 +790,7 @@ function dkVincularObservaciones() {
     if (!detalle) return;
     dkGuardandoObs = true;
     dkErrorObs = null;
+    dkAvisoObsEnCola = null;
     try {
       await api("/api/docente/observaciones", {
         method: "POST",
@@ -801,6 +805,12 @@ function dkVincularObservaciones() {
       renderDkPerfil();
     } catch (e) {
       dkGuardandoObs = false;
+      if (e.enCola) {
+        // Sin red: queda en el dispositivo y se envía sola (sin_conexion.js).
+        dkAvisoObsEnCola = "Observación guardada en este dispositivo. Se enviará sola cuando vuelva la conexión.";
+        dkPintarPerfil(dkPerfilActual, [], null);
+        return;
+      }
       dkErrorObs = e.message || "No se pudo guardar la observación.";
       dkPintarPerfil(dkPerfilActual, [], null);
     }
@@ -965,6 +975,13 @@ async function dkGuardarAsistencia() {
     dkPintarAsistencia();
   } catch (e) {
     dkGuardando = false;
+    if (e.enCola) {
+      // Sin red: queda en el dispositivo y se envía sola (sin_conexion.js).
+      dkSucio = false;
+      dkGuardadoEn = `${new Date().toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" })} en este dispositivo (se enviará al volver la conexión)`;
+      dkPintarAsistencia();
+      return;
+    }
     dkErrorAsistencia = e.message || "No se pudo guardar la asistencia.";
     dkPintarAsistencia();
   }

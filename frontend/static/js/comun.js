@@ -47,16 +47,52 @@ function esc(valor) {
     .replace(/'/g, "&#39;");
 }
 
+// Escrituras: cada una lleva un X-Id-Operacion único. Si no hay red, queda
+// en la cola del dispositivo (encolarOperacion, sin_conexion.js) y se reenvía
+// sola al volver la conexión; el servidor no la ejecuta dos veces
+// (backend/app/operaciones_cliente.py). Quien llama recibe un EnColaError
+// (err.enCola === true) con un mensaje que ya explica qué pasó.
+// opciones.sinCola = true: fallar como siempre en vez de encolar.
+// opciones.descripcion: texto para la lista de pendientes ("Asistencia 8-1").
+const METODOS_ESCRITURA = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+class EnColaError extends Error {
+  constructor() {
+    super("Sin conexión: quedó guardado en este dispositivo y se enviará solo cuando vuelva la conexión.");
+    this.enCola = true;
+  }
+}
+
 async function api(path, opciones = {}) {
+  const { sinCola, descripcion, ...opcionesFetch } = opciones;
+  const metodo = (opcionesFetch.method || "GET").toUpperCase();
+  const idOperacion = METODOS_ESCRITURA.has(metodo) ? scNuevoUuid() : null;
+  const pedir = () =>
+    fetch(path, {
+      ...opcionesFetch,
+      headers: {
+        "Content-Type": "application/json",
+        ...(opcionesFetch.headers || {}),
+        ...(idOperacion ? { "X-Id-Operacion": idOperacion } : {}),
+      },
+    });
+
   // Fase 4A': si al token de acceso le queda poco, se renueva ANTES de salir
   // (ver asegurarSesionFresca en auth.js). El 401 de más abajo se conserva
   // como red de seguridad — esto solo evita llegar a él.
   await asegurarSesionFresca();
 
-  let res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...opciones,
-  });
+  let res;
+  try {
+    res = await pedir();
+  } catch (err) {
+    const encolable =
+      idOperacion && !sinCola && !path.startsWith("/api/auth/") &&
+      (opcionesFetch.body == null || typeof opcionesFetch.body === "string");
+    if (!encolable) throw err;
+    await encolarOperacion({ uuid: idOperacion, path, metodo, body: opcionesFetch.body ?? null, descripcion });
+    throw new EnColaError();
+  }
 
   // Fase 4.0: si el token de acceso venció (15 min), se intenta UN refresh
   // silencioso y se reintenta la petición original UNA sola vez. _intentarRefresh
@@ -68,10 +104,7 @@ async function api(path, opciones = {}) {
   if (res.status === 401) {
     const refrescado = await _intentarRefresh();
     if (refrescado) {
-      res = await fetch(path, {
-        headers: { "Content-Type": "application/json" },
-        ...opciones,
-      });
+      res = await pedir();
     }
     if (!refrescado || res.status === 401) {
       _sesionExpirada();

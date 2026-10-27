@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 
-from .. import certificados, crud, ficha_matricula, promocion, rbac, schemas
+from .. import certificados, crud, ficha_matricula, models, promocion, rbac, schemas
 from ..database import get_db
 
 router = APIRouter(prefix="/api/certificados", tags=["certificados"])
@@ -23,6 +23,9 @@ def opciones_certificado(_obs=Depends(rbac.observar("constancias.ver"))):
     return {
         "tipos_documento": list(certificados.TIPOS_DOCUMENTO_TEXTO.keys()),
         "propositos": certificados.PROPOSITOS,
+        # Para filtrar el registro: además de los de la constancia de estudio,
+        # el paz y salvo de grado 11 (que no es un "Válido para...").
+        "propositos_registro": certificados.PROPOSITOS + [certificados.PROPOSITO_PAZ_Y_SALVO],
     }
 
 
@@ -32,10 +35,13 @@ def listar_constancias(
     desde: dt.date | None = None,
     hasta: dt.date | None = None,
     proposito: str | None = None,
+    estudiante_id: int | None = None,
     _obs=Depends(rbac.observar("constancias.ver")),
     db: Session = Depends(get_db),
 ):
-    return crud.listar_constancias(db, busqueda=q, desde=desde, hasta=hasta, proposito=proposito)
+    return crud.listar_constancias(
+        db, busqueda=q, desde=desde, hasta=hasta, proposito=proposito, estudiante_id=estudiante_id
+    )
 
 
 @router.post("/ficha-matricula")
@@ -56,8 +62,10 @@ def generar_ficha_matricula_endpoint(
     # Regla de promoción (app/promocion.py): subir con materias perdidas,
     # saltar o bajar de grado necesita permiso APROBADO de coordinación. Sin
     # él la ficha no se genera con ese grado — lo verifica el backend, no
-    # solo la pantalla.
-    destino = _grado_destino(solicitud.campos)
+    # solo la pantalla. Un estudiante nuevo de este año no se promueve: viene
+    # de otro colegio y su casilla del año es el grado en que entra.
+    nuevo = estudiante.matricula_nueva_este_anio
+    destino = None if nuevo else _grado_destino(solicitud.campos)
     if destino is not None:
         ev = promocion.evaluar(db, estudiante, destino)
         if not ev.puede_generar:
@@ -87,6 +95,8 @@ def generar_ficha_matricula_endpoint(
         curso=estudiante.curso,
         campos=solicitud.campos,
         docente=_obs.usuario.nombre if _obs is not None else None,
+        anio_matricula=estudiante.anio_ficha_matricula,
+        nuevo=nuevo,
     )
     media = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     extension = "docx"
@@ -125,6 +135,139 @@ def _grado_destino(campos: dict) -> int | None:
     return int(m.group()) if m else None
 
 
+#
+# --- Paz y salvo de servicio social (grado 11) --------------------------------
+# Van ANTES de /{constancia_id}/archivo para que "paz-y-salvo" nunca se lea
+# como un id de constancia.
+
+GRADO_PAZ_Y_SALVO = 11
+_NOMBRE_ARCHIVO_PYS = re.compile(r"^paz_y_salvo_[0-9a-f]{32}$")
+
+
+def _dict_paz_y_salvo(e, lugar: str | None = None) -> dict:
+    return {
+        "nombre_completo": e.nombre_completo,
+        "documento": e.documento,
+        "tipo_documento": e.tipo_documento,
+        "lugar_expedicion": lugar if lugar is not None else e.lugar_expedicion_documento,
+        "genero": e.genero,
+    }
+
+
+@router.get("/paz-y-salvo/estudiantes", response_model=list[schemas.PazYSalvoEstudiante])
+def estudiantes_paz_y_salvo(
+    sede_id: int | None = None,
+    _obs=Depends(rbac.observar("constancias.ver")),
+    db: Session = Depends(get_db),
+):
+    """Estudiantes activos de grado 11 (los que necesitan el paz y salvo de
+    servicio social para graduarse)."""
+    return [
+        schemas.PazYSalvoEstudiante(
+            id=e.id, nombre_completo=e.nombre_completo, documento=e.documento, tipo_documento=e.tipo_documento,
+            lugar_expedicion=e.lugar_expedicion_documento, genero=e.genero,
+            sede_id=e.sede_id, sede_nombre=e.sede.nombre if e.sede else "", grupo=e.grupo,
+        )
+        for e in crud.listar_estudiantes(db, sede_id=sede_id, grado=GRADO_PAZ_Y_SALVO, estado="ACTIVO")
+    ]
+
+
+@router.post("/paz-y-salvo", response_model=schemas.PazYSalvoResultado)
+def generar_paz_y_salvo(
+    solicitud: schemas.PazYSalvoSolicitud,
+    _obs=Depends(rbac.observar("constancias.generar")),
+    db: Session = Depends(get_db),
+):
+    """Un solo Word (y PDF si Word está instalado) con una página por
+    estudiante, para imprimir de una vez. Además queda una constancia por
+    estudiante en el registro (pestaña Constancias), con su propio Word."""
+    if not solicitud.estudiante_ids:
+        raise HTTPException(status_code=400, detail="Escoge al menos un estudiante.")
+    estudiantes = []
+    for estudiante_id in dict.fromkeys(solicitud.estudiante_ids):
+        e = crud.obtener_estudiante(db, estudiante_id)
+        if e is None:
+            raise HTTPException(status_code=404, detail=f"No existe el estudiante #{estudiante_id}.")
+        if e.grado != GRADO_PAZ_Y_SALVO:
+            raise HTTPException(status_code=400, detail=f"{e.nombre_completo} no está en grado 11.")
+        estudiantes.append(e)
+    lugares = {
+        e.id: (solicitud.lugares.get(e.id) or e.lugar_expedicion_documento or "").strip() for e in estudiantes
+    }
+
+    fecha = solicitud.fecha_expedicion
+    identificador = f"paz_y_salvo_{uuid.uuid4().hex}"
+    ruta_docx = CARPETA_CONSTANCIAS / f"{identificador}.docx"
+    ruta_docx.write_bytes(certificados.generar_paz_y_salvo([_dict_paz_y_salvo(e, lugares[e.id]) for e in estudiantes], fecha))
+    pdf = certificados.convertir_a_pdf(ruta_docx, CARPETA_CONSTANCIAS / f"{identificador}.pdf")
+
+    for e in estudiantes:
+        nombre_individual = f"{uuid.uuid4().hex}.docx"
+        (CARPETA_CONSTANCIAS / nombre_individual).write_bytes(
+            certificados.generar_paz_y_salvo([_dict_paz_y_salvo(e, lugares[e.id])], fecha)
+        )
+        if lugares[e.id] and not e.lugar_expedicion_documento:
+            e.lugar_expedicion_documento = lugares[e.id]
+        db.add(
+            models.ConstanciaGenerada(
+                estudiante_id=e.id, fecha_expedicion=fecha, proposito=certificados.PROPOSITO_PAZ_Y_SALVO,
+                jornada="", anio_escolar=fecha.year, lugar_expedicion=lugares[e.id],
+                tipo_documento_usado=e.tipo_documento, archivo_docx=nombre_individual, archivo_pdf=None,
+            )
+        )
+    db.commit()
+    return schemas.PazYSalvoResultado(estudiantes=len(estudiantes), archivo=identificador, pdf=pdf)
+
+
+@router.post("/paz-y-salvo/estudiante", response_model=schemas.ConstanciaRegistro)
+def generar_paz_y_salvo_estudiante(
+    solicitud: schemas.PazYSalvoEstudianteSolicitud,
+    _obs=Depends(rbac.observar("constancias.generar")),
+    db: Session = Depends(get_db),
+):
+    """El paz y salvo de UN estudiante desde su ficha (igual que la constancia
+    de estudio): Word + PDF, guardado en el registro de constancias."""
+    e = crud.obtener_estudiante(db, solicitud.estudiante_id)
+    if e is None:
+        raise HTTPException(status_code=404, detail="Ese estudiante no existe en la base de datos.")
+    if e.grado != GRADO_PAZ_Y_SALVO:
+        raise HTTPException(status_code=400, detail="El paz y salvo de servicio social es para estudiantes de grado 11.")
+    lugar = (solicitud.lugar_expedicion or e.lugar_expedicion_documento or "").strip()
+    datos = _dict_paz_y_salvo(e, lugar)
+    if solicitud.tipo_documento:
+        datos["tipo_documento"] = solicitud.tipo_documento
+
+    identificador = uuid.uuid4().hex
+    ruta_docx = CARPETA_CONSTANCIAS / f"{identificador}.docx"
+    ruta_docx.write_bytes(certificados.generar_paz_y_salvo([datos], solicitud.fecha_expedicion))
+    ruta_pdf = CARPETA_CONSTANCIAS / f"{identificador}.pdf"
+    pdf = certificados.convertir_a_pdf(ruta_docx, ruta_pdf)
+
+    if lugar and not e.lugar_expedicion_documento:
+        e.lugar_expedicion_documento = lugar
+    return crud.registrar_constancia(
+        db,
+        estudiante_id=e.id, fecha_expedicion=solicitud.fecha_expedicion, proposito=certificados.PROPOSITO_PAZ_Y_SALVO,
+        jornada="", anio_escolar=solicitud.fecha_expedicion.year, lugar_expedicion=lugar,
+        tipo_documento_usado=datos["tipo_documento"], archivo_docx=ruta_docx.name, archivo_pdf=ruta_pdf.name if pdf else None,
+    )
+
+
+@router.get("/paz-y-salvo/descargar/{archivo}")
+def descargar_paz_y_salvo(
+    archivo: str,
+    formato: str = "docx",
+    _obs=Depends(rbac.observar("constancias.ver")),
+    db: Session = Depends(get_db),
+):
+    if not _NOMBRE_ARCHIVO_PYS.match(archivo) or formato not in ("docx", "pdf"):
+        raise HTTPException(status_code=400, detail="Archivo no válido")
+    ruta = CARPETA_CONSTANCIAS / f"{archivo}.{formato}"
+    if not ruta.exists():
+        raise HTTPException(status_code=404, detail="Ese archivo ya no está en el disco")
+    return FileResponse(ruta, filename=f"Paz y salvo servicio social grado 11.{formato}")
+
+
 @router.get("/{constancia_id}/archivo")
 def obtener_archivo_constancia(
     constancia_id: int,
@@ -144,7 +287,8 @@ def obtener_archivo_constancia(
     if not ruta.exists():
         raise HTTPException(status_code=404, detail="El archivo ya no está en el disco")
 
-    nombre_descarga = f"Constancia - {constancia.estudiante.nombre_completo}.{formato}"
+    tipo = "Paz y salvo" if constancia.proposito == certificados.PROPOSITO_PAZ_Y_SALVO else "Constancia"
+    nombre_descarga = f"{tipo} - {constancia.estudiante.nombre_completo}.{formato}"
     return FileResponse(ruta, filename=nombre_descarga)
 
 

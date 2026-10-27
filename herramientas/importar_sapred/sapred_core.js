@@ -228,27 +228,42 @@ async function seleccionarColegioSapred(page) {
   const log = (m) => console.log(`[login-auto] ${m}`);
   const ETIQUETA = "INSTITUCION EDUCATIVA INDIGENA TECNICA AGROAMBIENTAL BILINGUE AWA";
   try {
-    // 1) ¿Es un <select> plano? Se reintenta por si el frame se recarga.
+    // 1) <select id="sistema">. En el PC, SAPRED lo esconde detrás de un
+    //    combobox de jQuery UI (un <input> con el nombre visible): hay que
+    //    poner el colegio en LOS DOS. Si solo se cambia el <select>, el input
+    //    sigue diciendo «DEMO», el combobox lo "corrige" y deja el <select>
+    //    vacío, y validar() de SAPRED rechaza el ingreso por falta de colegio.
+    //    Nunca se escoge otra institución "por si acaso": si no aparece AWA
+    //    se pasa al paso 2 y, si tampoco, la persona lo elige a mano.
     const puestoPorSelect = await _conReintentoDetach(async () => {
       const fr = await _frameLogin(page, { timeout: 15000 });
-      const tieneSelect = await fr.locator("select#sistema").count();
-      if (!tieneSelect) return false;
-      await fr.selectOption("select#sistema", { label: ETIQUETA }).catch(async () => {
-        await fr.selectOption("select#sistema", { index: 1 }).catch(() => {});
-      });
-      await fr.evaluate(() => {
-        const s = document.querySelector("#sistema");
-        if (s) {
-          s.dispatchEvent(new Event("change", { bubbles: true }));
-          if (window.jQuery) window.jQuery(s).trigger("change");
-        }
-      });
-      return true;
+      if (!(await fr.locator("select#sistema").count())) return false;
+      return fr.evaluate((etiqueta) => {
+        const s = document.querySelector("select#sistema");
+        const norm = (t) => t.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().toUpperCase();
+        const opcion = [...s.options].find((o) => norm(o.text) === etiqueta);
+        if (!opcion) return false;
+        s.value = opcion.value;
+        opcion.selected = true;
+        const visible = s.parentElement && s.parentElement.querySelector(".ui-autocomplete-input");
+        if (visible) visible.value = opcion.text;
+        if (typeof s.onchange === "function") s.onchange.call(s);
+        if (window.jQuery) window.jQuery(s).trigger("change");
+        return s.value === opcion.value;
+      }, ETIQUETA);
     }).catch(() => false);
     if (puestoPorSelect) {
-      log("colegio elegido por <select>");
       await page.waitForTimeout(2500);
-      return;
+      // SAPRED puede recargar el formulario al cambiar de colegio: se
+      // confirma que siga elegido antes de seguir.
+      const sigue = await _frameLogin(page, { timeout: 10000 })
+        .then((fr) => fr.evaluate(() => (document.querySelector("select#sistema") || {}).value || ""))
+        .catch(() => "");
+      if (sigue) {
+        log(`colegio elegido (AWA, código ${sigue})`);
+        return;
+      }
+      log("el colegio no quedó fijado en el <select>: se intenta por el menú");
     }
 
     // 2) Autocomplete (input + menú). Cada paso re-resuelve el frame.
@@ -413,6 +428,69 @@ async function listarJornadas(page, frame, sedeSapred, gradoSapred) {
   return opciones.filter((o) => o.value !== "");
 }
 
+// Periodos tal como los rotula SAPRED en el combo #id_peri. Un solo catálogo
+// para todos los scripts: antes cada uno hacía `periodo === "1" ? "1" : "2"`,
+// y el 3.er y 4.º periodo terminaban convertidos en el segundo.
+const PERIODOS_TEXTO = {
+  "1": "PRIMER PERIODO",
+  "2": "SEGUNDO PERIODO",
+  "3": "TERCER PERIODO",
+  "4": "CUARTO PERIODO",
+};
+
+// "3" -> "TERCER PERIODO". null si el número no es un periodo (el script debe
+// avisar y parar, nunca escoger otro periodo en silencio).
+function textoPeriodo(numero) {
+  return PERIODOS_TEXTO[String(numero ?? "").trim()] || null;
+}
+
+// Periodos y grados de una corrida, a partir de los argumentos del backend:
+// --periodos=1,2,3 (o el viejo --periodo=N) y --grados=5,7,9 (o el viejo
+// --grado=N; sin ninguno = todos los grados). Lanza un error claro si algo
+// no es válido, en vez de cambiarlo por otro valor.
+function leerPeriodosYGrados(args) {
+  const lista = (v) => String(v || "").split(",").map((x) => x.trim()).filter(Boolean);
+  const nums = lista(args.periodos).length ? lista(args.periodos) : lista(args.periodo);
+  if (!nums.length) throw new Error("Falta el periodo (--periodos=1,2 o --periodo=N).");
+  const periodos = [...new Set(nums)].sort().map((n) => {
+    const texto = textoPeriodo(n);
+    if (!texto) throw new Error(`Periodo no válido: ${n} (debe ser 1, 2, 3 o 4).`);
+    return { numero: Number(n), texto };
+  });
+  const pedidos = lista(args.grados).length ? lista(args.grados) : lista(args.grado);
+  const grados = pedidos.length ? GRADOS.filter((g) => pedidos.includes(String(g.numero))) : GRADOS;
+  if (pedidos.length && grados.length !== new Set(pedidos).size) throw new Error(`Grado no válido en: ${pedidos.join(", ")}.`);
+  return { periodos, grados };
+}
+
+// Elige el periodo en #id_peri y CONFIRMA que quedó. Primero por el rótulo
+// exacto; si SAPRED lo escribe distinto (TERCERO, "3er periodo", "PERIODO 3"),
+// por la primera palabra o el número. Si no lo encuentra, lanza un error con
+// las opciones que sí hay, en vez de dejar el que SAPRED traiga por defecto.
+async function elegirPeriodo(frame, periodoTexto) {
+  const palabra = periodoTexto.split(" ")[0]; // PRIMER | SEGUNDO | TERCER | CUARTO
+  const numero = Object.keys(PERIODOS_TEXTO).find((k) => PERIODOS_TEXTO[k] === periodoTexto);
+  const r = await frame.$$eval(
+    "#id_peri option",
+    (opts, { periodoTexto, palabra, numero }) => {
+      const norm = (t) => (t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().toUpperCase();
+      const con = opts.filter((o) => o.value !== "");
+      const elegida =
+        con.find((o) => norm(o.textContent) === periodoTexto) ||
+        con.find((o) => norm(o.textContent).startsWith(palabra)) ||
+        con.find((o) => new RegExp(`(^|[^0-9])${numero}([^0-9]|$)`).test(norm(o.textContent)));
+      return { valor: elegida ? elegida.value : null, opciones: con.map((o) => norm(o.textContent)) };
+    },
+    { periodoTexto, palabra, numero },
+  );
+  if (r.valor == null) {
+    throw new Error(`SAPRED no tiene «${periodoTexto}» en la lista de periodos (hay: ${r.opciones.join(", ") || "ninguno"}).`);
+  }
+  await frame.selectOption("#id_peri", { value: r.valor });
+  const quedo = await frame.$eval("#id_peri", (s) => s.value);
+  if (quedo !== r.valor) throw new Error(`No se pudo dejar elegido «${periodoTexto}» en SAPRED.`);
+}
+
 async function generarYExtraer(page, frame, context, sedeSapred, gradoSapred, periodoTexto, jornadaValue, extractor) {
   extractor = extractor || extraerBloquesDeReporteSapred;
   await ocultarPopups(page);
@@ -424,7 +502,7 @@ async function generarYExtraer(page, frame, context, sedeSapred, gradoSapred, pe
   await page.waitForTimeout(1000);
   await frame.selectOption("#cod_cur", { label: "[TODOS LAS SECCIONES]" });
   await page.waitForTimeout(2000);
-  await frame.selectOption("#id_peri", { label: periodoTexto });
+  await elegirPeriodo(frame, periodoTexto);
   await page.waitForTimeout(800);
 
   await ocultarPopups(page);
@@ -516,7 +594,7 @@ async function generarYExtraerBoletin(page, frame, context, sedeSapred, gradoSap
   }
   await page.waitForTimeout(1800);
 
-  await frame.selectOption("#id_peri", { label: periodoTexto }).catch(() => {});
+  await elegirPeriodo(frame, periodoTexto);
   await page.waitForTimeout(600);
 
   // Salida HTML (para leerla) + mostrar cuanti y cuali. OJO con estos dos:
@@ -955,6 +1033,10 @@ async function generarBoletinPdfSede(
 
 module.exports = {
   GRADOS,
+  PERIODOS_TEXTO,
+  textoPeriodo,
+  elegirPeriodo,
+  leerPeriodosYGrados,
   BOLETIN_GEN_RUTA,
   BOLETIN_GEN_ID,
   BOLETIN_GEN_MATCH,

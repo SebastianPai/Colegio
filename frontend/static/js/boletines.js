@@ -5,7 +5,7 @@
 // endpoints/lógica que antes — esto es una reorganización de UI, no un
 // cambio de arquitectura de datos.
 
-let seccionBoletines = "resumen"; // resumen | grupos | pendientes | continuidad | sapred
+let seccionBoletines = "resumen"; // resumen | grupos | pendientes | docentes | profesores | continuidad | sapred
 let sapredSubvista = "hub"; // hub | importar | sincoincidencia | generarpdf
 
 let filtroBoletinesAnio = new Date().getFullYear();
@@ -108,6 +108,7 @@ const SECCIONES_BOLETINES = [
   { id: "grupos", label: "Grupos" },
   { id: "pendientes", label: "Pendientes" },
   { id: "docentes", label: "Por docente" },
+  { id: "profesores", label: "Profesor por período" },
   { id: "continuidad", label: "Continuidad" },
   { id: "sapred", label: "SAPRED" },
 ];
@@ -394,6 +395,7 @@ async function renderBoletines() {
   if (seccionBoletines === "grupos") return renderSeccionGrupos();
   if (seccionBoletines === "pendientes") return renderSeccionPendientes();
   if (seccionBoletines === "docentes") return renderSeccionPorDocente();
+  if (seccionBoletines === "profesores") return renderSeccionProfesoresPeriodo();
   if (seccionBoletines === "continuidad") return renderSeccionContinuidad();
   if (seccionBoletines === "sapred") return renderSeccionSapred();
 }
@@ -2043,6 +2045,123 @@ async function cargarDetalleDocente(docenteId) {
 
 // --- Sección: Continuidad académica (P1 vs P2) ------------------------------
 
+// --- Profesor por período ---------------------------------------------------
+// Quién dicta cada materia en cada grupo, período por período, según los
+// boletines de SAPRED importados (puede cambiar a mitad de año). Se llena al
+// importar el Boletín informativo; lo importado antes de esto no lo trae.
+
+let profPerSede = "";
+let profPerBuscar = "";
+let profPerFiltro = "todos"; // todos | cambios | sin_docente
+
+async function renderSeccionProfesoresPeriodo() {
+  const contenedor = document.getElementById("contenido-boletines");
+  let filas, sedes;
+  try {
+    [filas, sedes] = await Promise.all([
+      api(`/api/boletines/docentes-por-periodo?anio_lectivo=${filtroBoletinesAnio}`),
+      api("/api/sedes"),
+    ]);
+  } catch (err) {
+    contenedor.innerHTML = `<div class="alerta-caja">${esc(err.message)}</div>`;
+    return;
+  }
+  contenedor.classList.remove("estado-carga");
+  pintarProfesoresPeriodo(contenedor, filas, sedes);
+}
+
+function pintarProfesoresPeriodo(contenedor, filas, sedes) {
+  const periodos = [...new Set(filas.flatMap((f) => Object.keys(f.periodos).map(Number)))].sort();
+  const nCambios = filas.filter((f) => f.cambia).length;
+  const nSinDocente = filas.filter((f) => f.sin_docente).length;
+  const sedesConDatos = sedes.filter((s) => filas.some((f) => f.sede_id === s.id));
+  const q = normalizarTexto(profPerBuscar);
+  const nombreGrupo = (f) => `${(NOMBRES_GRADOS.find(([n]) => n === f.grado) || [null, f.grado])[1]}${f.curso != null ? ` - ${f.curso}` : ""}`;
+  const visibles = filas.filter((f) => {
+    if (profPerSede && f.sede_id !== Number(profPerSede)) return false;
+    if (profPerFiltro === "cambios" && !f.cambia) return false;
+    if (profPerFiltro === "sin_docente" && !f.sin_docente) return false;
+    if (!q) return true;
+    const textos = [nombreGrupo(f), f.area_nombre, f.area_codigo, f.asignado_anio,
+      ...Object.values(f.periodos).flatMap((p) => [p.docente_nombre, p.nombre_sapred])];
+    return textos.some((t) => t && normalizarTexto(t).includes(q));
+  });
+  const celda = (p) => {
+    if (!p) return '<td class="pendiente">—</td>';
+    if (p.docente_id) return `<td>${esc(p.docente_nombre)}</td>`;
+    return `<td title="Este nombre del boletín no coincide con ningún docente de la base"><span class="badge-estado naranja">sin enlazar</span> ${esc(p.nombre_sapred)}</td>`;
+  };
+  const porSede = new Map();
+  visibles.forEach((f) => {
+    if (!porSede.has(f.sede_nombre)) porSede.set(f.sede_nombre, []);
+    porSede.get(f.sede_nombre).push(f);
+  });
+
+  contenedor.innerHTML = `
+    <div class="pagina-header">
+      <div>
+        <h2 style="margin:0; font-size:20px">Profesor por período</h2>
+        <p class="subtitulo-pagina">Quién dicta cada materia en cada grupo según el boletín de SAPRED de cada período (${filtroBoletinesAnio}).</p>
+      </div>
+    </div>
+    ${filas.length ? "" : `<div class="alerta-caja">Todavía no hay datos. Se llenan al importar el <strong>Boletín informativo</strong>
+      (SAPRED → Auditoría, «Notas + conceptos + observaciones»). Lo que se importó antes de este cambio no trae el profesor por período:
+      vuelva a correr la auditoría del boletín de los períodos que necesite.</div>`}
+    ${filas.length ? `
+    <div class="toolbar">
+      <input type="search" id="prof-per-buscar" placeholder="Buscar grupo, materia o docente..." value="${esc(profPerBuscar)}" />
+      <select id="prof-per-sede">
+        <option value="">Todas las sedes</option>
+        ${sedesConDatos.map((s) => `<option value="${s.id}" ${String(s.id) === String(profPerSede) ? "selected" : ""}>${esc(s.nombre)}</option>`).join("")}
+      </select>
+    </div>
+    <div class="segmentado" style="margin-bottom:8px">
+      ${[["todos", `Todas (${filas.length})`], ["cambios", `Cambió el profesor (${nCambios})`], ["sin_docente", `Sin enlazar (${nSinDocente})`]]
+        .map(([v, t]) => `<button type="button" class="segmentado-btn ${profPerFiltro === v ? "activo" : ""}" data-prof-per-filtro="${v}">${t}</button>`).join("")}
+    </div>
+    <p class="pendiente">${visibles.length} materia(s). Las filas marcadas tienen un profesor distinto entre períodos.
+      «Asignado (año)» es el que usan el panel del docente y los reportes.</p>
+    ${[...porSede.entries()].map(([sede, lista]) => `
+      <h3 style="margin:18px 0 6px">${esc(sede)}</h3>
+      <div class="tabla-scroll">
+        <table>
+          <thead><tr><th>Grupo</th><th>Materia</th>${periodos.map((p) => `<th>Período ${p}</th>`).join("")}<th>Asignado (año)</th></tr></thead>
+          <tbody>
+            ${lista.map((f) => `
+              <tr class="${f.cambia ? "fila-cambio-profesor" : ""}">
+                <td>${esc(nombreGrupo(f))}</td>
+                <td>${f.area_id == null ? "<em>Director de grupo</em>" : `${esc(f.area_nombre)}${f.area_codigo ? ` <span class="pendiente">(${esc(f.area_codigo)})</span>` : ""}`}
+                  ${f.cambia ? ' <span class="badge-estado proceso">cambió</span>' : ""}</td>
+                ${periodos.map((p) => celda(f.periodos[p])).join("")}
+                <td>${f.asignado_anio ? esc(f.asignado_anio) : '<span class="pendiente">—</span>'}</td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>`).join("") || '<p class="pendiente">Nada coincide con el filtro.</p>'}` : ""}
+  `;
+
+  document.getElementById("prof-per-buscar")?.addEventListener("input", (e) => {
+    profPerBuscar = e.target.value;
+    clearTimeout(pintarProfesoresPeriodo.t);
+    pintarProfesoresPeriodo.t = setTimeout(() => {
+      pintarProfesoresPeriodo(contenedor, filas, sedes);
+      const campo = document.getElementById("prof-per-buscar");
+      campo?.focus();
+      campo?.setSelectionRange(campo.value.length, campo.value.length);
+    }, 250);
+  });
+  document.getElementById("prof-per-sede")?.addEventListener("change", (e) => {
+    profPerSede = e.target.value;
+    pintarProfesoresPeriodo(contenedor, filas, sedes);
+  });
+  contenedor.querySelectorAll("[data-prof-per-filtro]").forEach((b) =>
+    b.addEventListener("click", () => {
+      profPerFiltro = b.dataset.profPerFiltro;
+      pintarProfesoresPeriodo(contenedor, filas, sedes);
+    })
+  );
+}
+
 async function renderSeccionContinuidad() {
   const contenedor = document.getElementById("contenido-boletines");
   const todasLasSedes = await api("/api/sedes");
@@ -2441,6 +2560,61 @@ async function abrirPanelGenerarBoletines(contenedor, sedes) {
   pintarFiltrosGeneracion(contenedor, sedes, historial);
 }
 
+// --- SAPRED: escoger varios periodos / grados -------------------------------
+
+// "1, 2 y 3" — para los textos de una corrida (las viejas solo traen periodo).
+function listaConY(items) {
+  return items.length > 1 ? `${items.slice(0, -1).join(", ")} y ${items[items.length - 1]}` : items.join("");
+}
+function periodosDeCorrida(a) {
+  return a.periodos && a.periodos.length ? a.periodos : [a.periodo];
+}
+function textoPeriodosCorrida(a) {
+  const ps = periodosDeCorrida(a);
+  return `${ps.length > 1 ? "Períodos" : "Período"} ${listaConY(ps)}`;
+}
+function textoGradosCorrida(a, todos = "Todos los grados") {
+  const gs = a.grados && a.grados.length ? a.grados : a.grado !== null && a.grado !== undefined ? [a.grado] : [];
+  if (!gs.length) return todos;
+  return listaConY(gs.map((g) => (NOMBRES_GRADOS.find(([n]) => n === g) || [null, String(g)])[1]));
+}
+
+// Casillas para escoger varios valores (periodos o grados), con "Todos".
+// soloUno = radio (los PDF van de a un periodo).
+function casillasSapredHtml({ nombre, titulo, opciones, marcados, ayuda = "", soloUno = false }) {
+  const tipo = soloUno ? "radio" : "checkbox";
+  return `
+    <fieldset class="ancho-completo sapred-casillas">
+      <legend>${titulo}</legend>
+      <div class="sapred-casillas-fila">
+        ${opciones.map(([valor, texto]) => `
+          <label class="check-linea sapred-casilla">
+            <input type="${tipo}" name="${nombre}" value="${valor}" ${marcados.includes(valor) ? "checked" : ""} /> ${texto}
+          </label>`).join("")}
+        ${soloUno ? "" : `<button type="button" class="boton secundario boton-chico" data-marcar-todos="${nombre}">Todos</button>
+        <button type="button" class="boton secundario boton-chico" data-marcar-ninguno="${nombre}">Ninguno</button>`}
+      </div>
+      ${ayuda ? `<p class="pendiente sapred-casillas-ayuda">${ayuda}</p>` : ""}
+    </fieldset>`;
+}
+
+function vincularCasillasSapred(form) {
+  form.querySelectorAll("[data-marcar-todos]").forEach((b) =>
+    b.addEventListener("click", () => form.querySelectorAll(`input[name="${b.dataset.marcarTodos}"]`).forEach((c) => { c.checked = true; }))
+  );
+  form.querySelectorAll("[data-marcar-ninguno]").forEach((b) =>
+    b.addEventListener("click", () => form.querySelectorAll(`input[name="${b.dataset.marcarNinguno}"]`).forEach((c) => { c.checked = false; }))
+  );
+}
+
+const OPCIONES_PERIODOS_SAPRED = [1, 2, 3, 4].map((p) => [p, `Período ${p}`]);
+const opcionesGradosSapred = () => NOMBRES_GRADOS.map(([n, nombre]) => [n, nombre]);
+const AYUDA_GRADOS_SAPRED = "Sin marcar ninguno = todos los grados.";
+
+function marcadosEn(form, nombre) {
+  return [...form.querySelectorAll(`input[name="${nombre}"]:checked`)].map((c) => Number(c.value));
+}
+
 function pintarFiltrosGeneracion(contenedor, sedes, historial) {
   const totalSedes = sedes.length;
   const seleccionadas = generarBoletinesSedesSeleccionadas.size;
@@ -2453,17 +2627,9 @@ function pintarFiltrosGeneracion(contenedor, sedes, historial) {
       <label>Contraseña SAPRED (opcional)
         <input type="password" name="clave" autocomplete="off" placeholder="Solo para esta corrida — no se guarda" />
       </label>
-      <label>Período
-        <select name="periodo">
-          ${[1, 2, 3, 4].map((p) => `<option value="${p}" ${filtroBoletinesPeriodo === p ? "selected" : ""}>Período ${p}</option>`).join("")}
-        </select>
-      </label>
-      <label>Grado
-        <select name="grado">
-          <option value="">Todos los grados de la sede</option>
-          ${NOMBRES_GRADOS.map(([n, nombre]) => `<option value="${n}">${nombre}</option>`).join("")}
-        </select>
-      </label>
+      ${casillasSapredHtml({ nombre: "periodo", titulo: "Período", opciones: OPCIONES_PERIODOS_SAPRED, marcados: [filtroBoletinesPeriodo], soloUno: true,
+        ayuda: "Los boletines en PDF se generan de a un período." })}
+      ${casillasSapredHtml({ nombre: "grados", titulo: "Grados", opciones: opcionesGradosSapred(), marcados: [], ayuda: AYUDA_GRADOS_SAPRED })}
       <div class="ancho-completo">
         <details class="seccion-colapsable" id="detalle-sedes-generar">
           <summary>Sedes: ${seleccionadas === totalSedes ? "todas" : `${seleccionadas} de ${totalSedes}`} seleccionadas</summary>
@@ -2495,6 +2661,8 @@ function pintarFiltrosGeneracion(contenedor, sedes, historial) {
     </details>
   `;
 
+  vincularCasillasSapred(document.getElementById("form-generar-boletines"));
+
   document.getElementById("check-todas-sedes-generar").addEventListener("change", (e) => {
     if (e.target.checked) sedes.forEach((s) => generarBoletinesSedesSeleccionadas.add(s.id));
     else generarBoletinesSedesSeleccionadas.clear();
@@ -2520,6 +2688,7 @@ function pintarFiltrosGeneracion(contenedor, sedes, historial) {
       return;
     }
     const datos = Object.fromEntries(new FormData(ev.target).entries());
+    const grados = marcadosEn(ev.target, "grados");
     const todas = generarBoletinesSedesSeleccionadas.size === totalSedes;
     const boton = document.getElementById("btn-generar-boletines");
     boton.disabled = true;
@@ -2528,8 +2697,8 @@ function pintarFiltrosGeneracion(contenedor, sedes, historial) {
       const corrida = await api("/api/boletines/generar-pdf", {
         method: "POST",
         body: JSON.stringify({
-          periodo: Number(datos.periodo),
-          grado: datos.grado === "" ? null : Number(datos.grado),
+          periodos: [Number(datos.periodo)],
+          grados: grados.length ? grados : null,
           sede_ids: todas ? null : Array.from(generarBoletinesSedesSeleccionadas),
           usuario: (datos.usuario || "").trim() || null,
           clave: datos.clave || null,
@@ -2704,7 +2873,7 @@ function historialGeneracionHtml(historial) {
         )
         .join("");
       return `<div class="fila-pendiente-modal" style="display:block">
-        <div><strong>${fecha}</strong> · P${a.periodo} · <span class="badge-estado ${a.estado === "completada" ? "ok" : a.estado === "error" ? "alerta" : "proceso"}">${est.icono} ${est.texto}</span> · ${a.sedes_completadas}/${a.sedes_totales} sede(s)</div>
+        <div><strong>${fecha}</strong> · ${textoPeriodosCorrida(a)} · <span class="badge-estado ${a.estado === "completada" ? "ok" : a.estado === "error" ? "alerta" : "proceso"}">${est.icono} ${est.texto}</span> · ${a.sedes_completadas}/${a.sedes_totales} sede(s)</div>
         ${archivos ? `<ul style="margin:6px 0 0; padding-left:18px">${archivos}</ul>` : ""}
       </div>`;
     })
@@ -2828,10 +2997,10 @@ function cerrarModalHistorialAuditorias() {
 
 function filaHistorialAuditoriaHtml(a, idx) {
   const est = ESTADOS_AUDITORIA[a.estado] || { icono: "", texto: a.estado };
-  const nombreGrado = a.grado !== null ? (NOMBRES_GRADOS.find(([n]) => n === a.grado) || [null, "?"])[1] : "Todos";
+  const nombreGrado = textoGradosCorrida(a, "Todos");
   return `<tr>
     <td>${a.creado_en.slice(0, 16).replace("T", " ")}</td>
-    <td>${a.periodo}</td>
+    <td>${listaConY(periodosDeCorrida(a))}</td>
     <td>${nombreGrado}</td>
     <td>${a.sedes_completadas}/${a.sedes_totales}</td>
     <td>${est.icono} ${est.texto}</td>
@@ -2881,7 +3050,7 @@ function pintarListaHistorialAuditorias(contenedor, historial, sedes) {
 
 function pintarDetalleAuditoriaModal(contenedor, a, historial, sedes) {
   const est = ESTADOS_AUDITORIA[a.estado] || { icono: "", texto: a.estado };
-  const nombreGrado = a.grado !== null ? (NOMBRES_GRADOS.find(([n]) => n === a.grado) || [null, "Todos"])[1] : "Todos los grados";
+  const nombreGrado = textoGradosCorrida(a);
   const fecha = a.creado_en.slice(0, 16).replace("T", " ");
   const fallidas = a.detalle_sedes.filter((d) => d.estado !== "completada");
   const puedeReintentar = ["completada", "error"].includes(a.estado) && fallidas.length > 0;
@@ -2893,7 +3062,7 @@ function pintarDetalleAuditoriaModal(contenedor, a, historial, sedes) {
           <div>
             <h3 style="margin:0 0 4px">Auditoría del ${fecha}</h3>
             <p class="pendiente" style="margin:0">
-              Período ${a.periodo} · ${nombreGrado} ·
+              ${textoPeriodosCorrida(a)} · ${nombreGrado} ·
               <span class="badge-estado ${a.estado === "error" ? "alerta" : a.estado === "completada" ? "ok" : "proceso"}">${est.icono} ${est.texto}</span>
             </p>
           </div>
@@ -2963,7 +3132,7 @@ function pintarDetalleAuditoriaModal(contenedor, a, historial, sedes) {
       if (
         !confirm(
           `Se lanzará una auditoría NUEVA solo para ${fallidas.length} sede(s)/grado(s) que fallaron.\n` +
-            `Período ${a.periodo}. No vuelve a tocar lo que ya quedó completo. ¿Continuar?`
+            `${textoPeriodosCorrida(a)}. No vuelve a tocar lo que ya quedó completo. ¿Continuar?`
         )
       )
         return;
@@ -3000,7 +3169,7 @@ function informeAuditoriaHtml(a) {
   const fecha = a.creado_en.slice(0, 16).replace("T", " ");
   const finalizada = a.terminado_en ? a.terminado_en.slice(0, 16).replace("T", " ") : "—";
   const est = ESTADOS_AUDITORIA[a.estado] || { texto: a.estado };
-  const nombreGrado = a.grado !== null ? (NOMBRES_GRADOS.find(([n]) => n === a.grado) || [null, "Todos"])[1] : "Todos los grados";
+  const nombreGrado = textoGradosCorrida(a);
   const textoEstadoSede = { completada: "Completada", advertencia: "Advertencia", error: "Error" };
 
   const filaSede = (d) => `
@@ -3012,7 +3181,7 @@ function informeAuditoriaHtml(a) {
 
   return `
     <div class="hoja-imprimir">
-      ${membreteHtml(`CONSTANCIA DE AUDITORÍA AUTOMÁTICA SAPRED — PERÍODO ${a.periodo} — ${a.anio_lectivo}`)}
+      ${membreteHtml(`CONSTANCIA DE AUDITORÍA AUTOMÁTICA SAPRED — ${textoPeriodosCorrida(a).toUpperCase()} — ${a.anio_lectivo}`)}
       <div class="hoja-campos">
         <div class="campo"><span class="etiqueta">FECHA DE LA AUDITORÍA:</span><span class="valor">${fecha}</span></div>
         <div class="campo"><span class="etiqueta">FINALIZADA:</span><span class="valor">${finalizada}</span></div>
@@ -3082,17 +3251,9 @@ function pintarFiltrosAuditoria(contenedor, sedes, historial) {
       <label>Contraseña SAPRED (opcional)
         <input type="password" name="clave" autocomplete="off" placeholder="Solo para esta corrida — no se guarda" />
       </label>
-      <label>Período
-        <select name="periodo">
-          ${[1, 2, 3, 4].map((p) => `<option value="${p}" ${filtroBoletinesPeriodo === p ? "selected" : ""}>Período ${p}</option>`).join("")}
-        </select>
-      </label>
-      <label>Grado
-        <select name="grado">
-          <option value="">Todos los grados</option>
-          ${NOMBRES_GRADOS.map(([n, nombre]) => `<option value="${n}">${nombre}</option>`).join("")}
-        </select>
-      </label>
+      ${casillasSapredHtml({ nombre: "periodos", titulo: "Períodos", opciones: OPCIONES_PERIODOS_SAPRED, marcados: [filtroBoletinesPeriodo],
+        ayuda: "Puede marcar varios: se revisan uno tras otro en la misma corrida." })}
+      ${casillasSapredHtml({ nombre: "grados", titulo: "Grados", opciones: opcionesGradosSapred(), marcados: [], ayuda: AYUDA_GRADOS_SAPRED })}
       <div class="ancho-completo">
         <details class="seccion-colapsable" id="detalle-sedes-auditoria">
           <summary>Sedes: ${seleccionadas === totalSedes ? "todas" : `${seleccionadas} de ${totalSedes}`} seleccionadas</summary>
@@ -3124,6 +3285,7 @@ function pintarFiltrosAuditoria(contenedor, sedes, historial) {
   `;
 
   document.getElementById("btn-ver-historial-auditorias").addEventListener("click", () => abrirModalHistorialAuditorias(sedes));
+  vincularCasillasSapred(document.getElementById("form-auditoria-sapred"));
 
   document.getElementById("check-todas-sedes-auditoria")?.addEventListener("change", (e) => {
     if (e.target.checked) sedes.forEach((s) => auditoriaSapredSedesSeleccionadas.add(s.id));
@@ -3150,6 +3312,12 @@ function pintarFiltrosAuditoria(contenedor, sedes, historial) {
       return;
     }
     const datos = Object.fromEntries(new FormData(ev.target).entries());
+    const periodos = marcadosEn(ev.target, "periodos");
+    const grados = marcadosEn(ev.target, "grados");
+    if (!periodos.length) {
+      alert("Marca al menos un período.");
+      return;
+    }
     const todasSeleccionadas = auditoriaSapredSedesSeleccionadas.size === totalSedes;
     const boton = document.getElementById("btn-iniciar-auditoria");
     boton.disabled = true;
@@ -3159,8 +3327,8 @@ function pintarFiltrosAuditoria(contenedor, sedes, historial) {
         method: "POST",
         body: JSON.stringify({
           tipo: ["boletin", "ambos"].includes(datos.tipo) ? datos.tipo : "notas",
-          periodo: Number(datos.periodo),
-          grado: datos.grado === "" ? null : Number(datos.grado),
+          periodos,
+          grados: grados.length ? grados : null,
           sede_ids: todasSeleccionadas ? null : Array.from(auditoriaSapredSedesSeleccionadas),
           usuario: (datos.usuario || "").trim() || null,
           clave: datos.clave || null,

@@ -6,7 +6,7 @@
 // Uso: doble clic en Importar_SAPRED.bat, o "node importar_sapred.js"
 
 const readline = require("readline");
-const { GRADOS, apiGet, apiPostJSON, estaLogueado, esperarLogin, abrirNavegadorSapred, abrirPestanaReporte, generarYExtraerTodasJornadas } = require("./sapred_core.js");
+const { GRADOS, apiGet, apiPostJSON, estaLogueado, esperarLogin, abrirNavegadorSapred, abrirPestanaReporte, generarYExtraerTodasJornadas, textoPeriodo } = require("./sapred_core.js");
 const SEDES_SAPRED = require("./config_sedes.json");
 
 const API_BASE = "http://127.0.0.1:8000";
@@ -28,9 +28,12 @@ function preguntar(texto) {
     process.exit(1);
   }
 
-  let periodoNum = process.argv[2] || (await preguntar("¿Qué período vas a revisar? (1 o 2, Enter = 2): "));
-  periodoNum = periodoNum === "1" ? "1" : "2";
-  const periodoTexto = periodoNum === "1" ? "PRIMER PERIODO" : "SEGUNDO PERIODO";
+  let periodoNum = process.argv[2] || (await preguntar("¿Qué período vas a revisar? (1, 2, 3 o 4, Enter = 2): "));
+  let periodoTexto = textoPeriodo(periodoNum.trim() || "2");
+  while (!periodoTexto) {
+    periodoNum = await preguntar("Ese período no existe. Escribe 1, 2, 3 o 4: ");
+    periodoTexto = textoPeriodo(periodoNum);
+  }
 
   let gradoFiltro = process.argv[3] || (await preguntar("¿Solo un grado? Número (0=Transición...11=Once) o Enter para TODOS: "));
   const gradosAProcesar = gradoFiltro ? GRADOS.filter((g) => String(g.numero) === gradoFiltro.trim()) : GRADOS;

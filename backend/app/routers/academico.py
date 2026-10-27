@@ -300,6 +300,18 @@ def importar_boletin_bloques(
     )
 
 
+@router.get("/boletines/docentes-por-periodo", response_model=list[schemas.DocenteMateriaPeriodos])
+def docentes_por_periodo(
+    anio_lectivo: int | None = None,
+    sede_id: int | None = None,
+    _obs=Depends(rbac.observar("boletines.ver")),
+    db: Session = Depends(get_db),
+):
+    """Quién dicta cada materia en cada grupo, periodo por periodo, según los
+    boletines importados de SAPRED (marca dónde cambió el profesor)."""
+    return crud.docentes_por_periodo(db, anio_lectivo or dt.date.today().year, sede_id)
+
+
 @router.get("/boletines/importaciones-boletin-pdf", response_model=list[schemas.ImportacionBoletinPdfHistorial])
 def listar_importaciones_pdf_boletin(
     limite: int = 20, _obs=Depends(rbac.observar("boletines.ver")), db: Session = Depends(get_db)
@@ -402,8 +414,8 @@ def reintentar_auditoria_sapred(
         db,
         schemas.AuditoriaSapredCrear(
             anio_lectivo=scope["anio_lectivo"],
-            periodo=scope["periodo"],
-            grado=scope["grado"],
+            periodos=scope["periodos"],
+            grados=scope["grados"],
             sede_ids=scope["sede_ids"],
             tipo=scope["tipo"],
         ),
@@ -470,6 +482,9 @@ def iniciar_generacion_boletines(
             detail=f"Ya hay un proceso de SAPRED en curso (#{en_curso.id}, estado: {en_curso.estado}). Espera a que termine.",
         )
     datos.tipo = "boletin_pdf"
+    if len(datos.periodos) > 1:
+        # Los PDF de cada sede van a una carpeta por periodo: se genera uno a la vez.
+        raise HTTPException(status_code=400, detail="Los boletines en PDF se generan de a un periodo. Escoge solo uno.")
     auditoria = sapred_auditoria.crear_auditoria(db, datos)
     credenciales = (
         {"usuario": datos.usuario, "clave": datos.clave}

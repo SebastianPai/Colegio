@@ -62,6 +62,11 @@ CATALOGO: list[DefinicionPermiso] = [
     DefinicionPermiso("estudiantes.eliminar", "estudiantes", "Eliminar un estudiante", sensible=True),
     DefinicionPermiso("estudiantes.ver_documentos", "estudiantes", "Ver/descargar documentos escaneados (cédula, matrícula...)", sensible=True),
     DefinicionPermiso("estudiantes.documentos_gestionar", "estudiantes", "Subir o eliminar documentos escaneados", sensible=True),
+    # Decisión del colegio (14/10/2026): docentes y auxiliares de las sedes
+    # suben los documentos de sus estudiantes desde el celular, también sin
+    # conexión. Solo el director de grupo y solo de SU grupo (lo valida
+    # routers/docente.py); borrar sigue siendo de Secretaría.
+    DefinicionPermiso("estudiantes.documentos_grupo", "estudiantes", "Subir documentos escaneados de los estudiantes de su grupo (director de grupo)", sensible=True),
     # Decisión del colegio (22/09/2026): el director de grupo (AsignacionDocente
     # con area_id IS NULL) puede ver y editar la ficha de matrícula completa de
     # los estudiantes de su propio grupo, sin necesitar estudiantes.editar (que
@@ -155,38 +160,20 @@ class DefinicionRol:
 # desactivar). Esta es solo la SEMILLA: se aplica una única vez, la primera
 # vez que cada rol se crea. Ediciones posteriores del administrador nunca se
 # revierten en un reinicio (ver migraciones.sembrar_roles_sistema).
+#
+# El Administrador tiene TODOS los permisos del catálogo, siempre (decisión
+# del colegio 19/10/2026: "el admin debe poder ver todo", incluidas las
+# observaciones confidenciales; reemplaza la de mínimo privilegio del
+# 12/09/2026). migraciones.administrador_con_todos_los_permisos() se los da en
+# cada arranque y rbac_admin no deja quitárselos.
+ROL_TODOS_LOS_PERMISOS = "administrador"
+
 ROLES_SISTEMA: list[DefinicionRol] = [
     DefinicionRol(
-        codigo="administrador",
+        codigo=ROL_TODOS_LOS_PERMISOS,
         nombre="Administrador",
-        descripcion="Control total: usuarios, roles, permisos, configuración, auditoría y todo lo académico.",
-        permisos=[
-            "usuarios.ver", "usuarios.crear", "usuarios.editar", "usuarios.estado",
-            "usuarios.restablecer_clave", "usuarios.roles", "usuarios.sedes",
-            "roles.ver", "roles.gestionar",
-            "sesiones.ver", "sesiones.revocar",
-            "estudiantes.ver", "estudiantes.crear", "estudiantes.editar", "estudiantes.eliminar",
-            "estudiantes.ver_documentos", "estudiantes.documentos_gestionar",
-            "sedes.ver", "catalogos.ver", "catalogos.gestionar",
-            "docentes.ver", "docentes.evaluar", "docentes.gestionar", "grupos.ver", "grupos.gestionar",
-            "horario.ver", "horario.gestionar", "horario.exportar",
-            "boletines.ver", "boletines.gestionar", "boletines.exportar",
-            "sapred.importar", "sapred.ejecutar",
-            "constancias.ver", "constancias.generar",
-            "reportes.ver", "reportes.exportar",
-            # Asistencia: administra el módulo pero no registra clase (no es docente).
-            "asistencia.ver", "asistencia.corregir", "asistencia.anular", "asistencia.exportar",
-            "asistencia.estadisticas", "asistencia.cumplimiento", "asistencia.resolver_conflictos",
-            # Observaciones: el Administrador NO recibe ver_confidenciales por
-            # defecto (mínimo privilegio; decisión aprobada 12/09/2026, punto
-            # 2). Puede concedérselo desde la pantalla de roles, y cuando
-            # exista la auditoría quedará registrado que lo hizo.
-            "observaciones.ver", "observaciones.crear", "observaciones.editar", "observaciones.eliminar",
-            "alertas.ver", "alertas.atender", "promocion.autorizar", "alertas.configurar",
-            "auditoria.ver", "configuracion.gestionar",
-            "diagnosticos.ver", "diagnosticos.importar", "diagnosticos.vincular",
-            "diagnosticos.observar", "diagnosticos.exportar",
-        ],
+        descripcion="Control total: ve y gestiona todo el sistema (todos los permisos, siempre).",
+        permisos=[p.codigo for p in CATALOGO],
     ),
     DefinicionRol(
         codigo="secretaria",
@@ -237,6 +224,9 @@ ROLES_SISTEMA: list[DefinicionRol] = [
             "observaciones.ver_confidenciales", "seguimientos.gestionar",
             "alertas.ver", "alertas.atender",
             "diagnosticos.ver", "diagnosticos.vincular", "diagnosticos.observar", "diagnosticos.exportar",
+            # Pedido del colegio (14/10/2026): el orientador consulta horarios
+            # (dónde está un grupo/docente a cada hora). Solo consulta.
+            "horario.ver",
         ],
     ),
     DefinicionRol(
@@ -248,6 +238,7 @@ ROLES_SISTEMA: list[DefinicionRol] = [
             "asistencia.registrar", "asistencia.ver_propia",
             "observaciones.ver", "observaciones.crear", "observaciones.editar_propias",
             "estudiantes.editar_ficha_grupo",
+            "estudiantes.documentos_grupo",
         ],
     ),
 ]

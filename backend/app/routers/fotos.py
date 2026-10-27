@@ -44,19 +44,34 @@ def generar_miniatura_pdf(ruta_pdf: Path, ruta_miniatura: Path) -> bool:
         return False
 
 
-@router.post("/estudiantes/{estudiante_id}/fotos")
-async def subir_foto(
+def borrar_documento(db: Session, foto) -> None:
+    """Borra la fila y el archivo (y su miniatura) del disco."""
+    crud.eliminar_foto(db, foto.id)
+    (CARPETA_SUBIDAS / foto.nombre_archivo).unlink(missing_ok=True)
+    (CARPETA_SUBIDAS / nombre_miniatura(foto.nombre_archivo)).unlink(missing_ok=True)
+
+
+async def guardar_documento(
+    db: Session,
     estudiante_id: int,
-    etiqueta: str = Form("Documento"),
-    anio_lectivo: int = Form(default_factory=lambda: dt.date.today().year),
-    permanente: bool = Form(False),
-    archivo: UploadFile = File(...),
-    _obs=Depends(rbac.observar("estudiantes.documentos_gestionar")),
-    db: Session = Depends(get_db),
-):
-    estudiante = crud.obtener_estudiante(db, estudiante_id)
-    if estudiante is None:
-        raise HTTPException(status_code=404, detail="Estudiante no encontrado")
+    etiqueta: str,
+    anio_lectivo: int,
+    permanente: bool,
+    archivo: UploadFile,
+    uuid_cliente: str | None = None,
+    reemplaza_id: int | None = None,
+) -> dict:
+    """Lógica común de subida (Secretaría y director de grupo, ver
+    routers/docente.py). `uuid_cliente` hace la subida idempotente: el
+    celular lo manda desde su cola sin conexión y, si reintenta una subida
+    que sí había llegado, recibe la misma respuesta sin duplicar nada.
+    `reemplaza_id` borra el documento anterior DESPUÉS de guardar el nuevo,
+    y solo si es del mismo estudiante."""
+    uuid_cliente = (uuid_cliente or "").strip()[:36] or None
+    if uuid_cliente:
+        previa = crud.foto_por_uuid_cliente(db, estudiante_id, uuid_cliente)
+        if previa is not None:
+            return {"id": previa.id, "etiqueta": previa.etiqueta, "anio_lectivo": previa.anio_lectivo, "orden": previa.orden}
 
     extension = Path(archivo.filename or "").suffix.lower()
     if extension not in EXTENSIONES_PERMITIDAS:
@@ -99,13 +114,40 @@ async def subir_foto(
         etiqueta,
         None if permanente else anio_lectivo,
         f"{estudiante_id}/{nombre_archivo}",
+        uuid_cliente=uuid_cliente,
     )
+    if reemplaza_id:
+        anterior = crud.obtener_foto(db, reemplaza_id)
+        if anterior is not None and anterior.estudiante_id == estudiante_id and anterior.id != foto.id:
+            borrar_documento(db, anterior)
     return {"id": foto.id, "etiqueta": foto.etiqueta, "anio_lectivo": foto.anio_lectivo, "orden": foto.orden}
+
+
+@router.post("/estudiantes/{estudiante_id}/fotos")
+async def subir_foto(
+    estudiante_id: int,
+    etiqueta: str = Form("Documento"),
+    anio_lectivo: int = Form(default_factory=lambda: dt.date.today().year),
+    permanente: bool = Form(False),
+    archivo: UploadFile = File(...),
+    uuid_cliente: str | None = Form(None),
+    reemplaza_id: int | None = Form(None),
+    _obs=Depends(rbac.observar("estudiantes.documentos_gestionar")),
+    db: Session = Depends(get_db),
+):
+    if crud.obtener_estudiante(db, estudiante_id) is None:
+        raise HTTPException(status_code=404, detail="Estudiante no encontrado")
+    return await guardar_documento(
+        db, estudiante_id, etiqueta, anio_lectivo, permanente, archivo, uuid_cliente, reemplaza_id
+    )
 
 
 @router.get("/fotos/{foto_id}/archivo")
 def obtener_archivo_foto(
-    foto_id: int, _obs=Depends(rbac.observar("estudiantes.ver_documentos")), db: Session = Depends(get_db)
+    foto_id: int,
+    descargar: bool = False,
+    _obs=Depends(rbac.observar("estudiantes.ver_documentos")),
+    db: Session = Depends(get_db),
 ):
     foto = crud.obtener_foto(db, foto_id)
     if foto is None:
@@ -113,6 +155,8 @@ def obtener_archivo_foto(
     ruta = CARPETA_SUBIDAS / foto.nombre_archivo
     if not ruta.exists():
         raise HTTPException(status_code=404, detail="El archivo ya no está en el disco")
+    if descargar:
+        return FileResponse(ruta, filename=foto.nombre_descarga)
     return FileResponse(ruta)
 
 
@@ -143,10 +187,7 @@ def obtener_miniatura_foto(
 def eliminar_foto(
     foto_id: int, _obs=Depends(rbac.observar("estudiantes.documentos_gestionar")), db: Session = Depends(get_db)
 ):
-    foto = crud.eliminar_foto(db, foto_id)
+    foto = crud.obtener_foto(db, foto_id)
     if foto is None:
         raise HTTPException(status_code=404, detail="Foto no encontrada")
-    ruta = CARPETA_SUBIDAS / foto.nombre_archivo
-    ruta.unlink(missing_ok=True)
-    ruta_miniatura = CARPETA_SUBIDAS / nombre_miniatura(foto.nombre_archivo)
-    ruta_miniatura.unlink(missing_ok=True)
+    borrar_documento(db, foto)

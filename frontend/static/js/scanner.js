@@ -83,19 +83,19 @@ async function abrirEscanerDocumento({ titulo, onGuardar }) {
       overlay,
       estado,
       cerrar,
-      "El navegador exige una conexión segura (HTTPS) para usar la cámara desde la web. Puedes tomar la foto o subir el archivo directamente."
+      "Desde esta dirección la página no puede abrir la cámara. No pasa nada: toque el botón de abajo y tome la foto con la cámara normal del celular, o escoja una foto que ya tenga guardada."
     );
     return;
   }
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    pintarFallback(overlay, estado, cerrar, "Este navegador no permite acceder a la cámara desde la web.");
+    pintarFallback(overlay, estado, cerrar, "Este navegador no deja abrir la cámara aquí. Toque el botón de abajo para tomar la foto o escoger una guardada.");
     return;
   }
 
   try {
     await Promise.all([asegurarOpenCv(), asegurarJsPdf()]);
   } catch (err) {
-    pintarFallback(overlay, estado, cerrar, "No se pudo cargar el escáner (revisa la conexión) — puedes subir el archivo directamente.");
+    pintarFallback(overlay, estado, cerrar, "El escáner no cargó. Toque el botón de abajo para tomar la foto o escoger una guardada.");
     return;
   }
 
@@ -737,11 +737,11 @@ function mostrarPaginas(overlay, estado, cerrar) {
           </div>`
           )
           .join("")}
-        <button type="button" class="escaner-agregar-pagina" id="escaner-agregar-pagina">+ Agregar página</button>
+        <button type="button" class="escaner-agregar-pagina" id="escaner-agregar-pagina">+ Tomar otra página</button>
       </div>
       <div class="escaner-revision-acciones">
         <button type="button" class="boton secundario" id="escaner-cancelar-todo">Cancelar</button>
-        <button type="button" class="boton" id="escaner-finalizar" ${estado.paginas.length ? "" : "disabled"}>Finalizar y generar PDF</button>
+        <button type="button" class="boton" id="escaner-finalizar" ${estado.paginas.length ? "" : "disabled"}><i data-lucide=check class=ico></i> Listo, guardar</button>
       </div>
     </div>
   `;
@@ -791,7 +791,7 @@ async function generarPdf(paginas) {
 }
 
 async function finalizarYGuardar(overlay, estado, cerrar) {
-  pintarCargando(overlay, "Generando PDF...");
+  pintarCargando(overlay, "Preparando el documento...");
   let blob;
   try {
     blob = await generarPdf(estado.paginas);
@@ -800,10 +800,10 @@ async function finalizarYGuardar(overlay, estado, cerrar) {
     return;
   }
 
-  pintarCargando(overlay, "Guardando...");
+  pintarCargando(overlay, "Guardando... no cierre esta ventana");
   try {
     await estado.onGuardar(blob, "documento_escaneado.pdf");
-    pintarExito(overlay, `Documento guardado (${estado.paginas.length} página(s))`);
+    pintarExito(overlay, `Listo, documento guardado (${estado.paginas.length} página${estado.paginas.length === 1 ? "" : "s"})`);
     setTimeout(cerrar, 900);
   } catch (err) {
     pintarError(overlay, err.message || "No se pudo guardar el documento.", () => mostrarPaginas(overlay, estado, cerrar));
@@ -835,10 +835,10 @@ function pintarError(overlay, texto, alReintentar) {
 function pintarFallback(overlay, estado, cerrar, mensaje) {
   overlay.innerHTML = `
     <div class="escaner-centro">
-      <p class="escaner-texto-error">No fue posible utilizar el escáner.</p>
+      <p class="escaner-texto-error">La cámara no se abrió aquí</p>
       <p class="escaner-texto-fallback">${mensaje}</p>
-      <label class="boton" style="cursor:pointer">
-        Tomar/seleccionar una imagen
+      <label class="boton" style="cursor:pointer; font-size:16px; padding:12px 20px">
+        <i data-lucide=camera class=ico></i> Tomar foto o escoger una guardada
         <input type="file" id="escaner-fallback-input" accept="image/*,application/pdf" capture="environment" style="display:none" />
       </label>
       <button type="button" class="boton secundario" id="escaner-fallback-cerrar" style="margin-top:10px">Cancelar</button>
@@ -848,10 +848,10 @@ function pintarFallback(overlay, estado, cerrar, mensaje) {
   document.getElementById("escaner-fallback-input").addEventListener("change", async (e) => {
     const archivo = e.target.files[0];
     if (!archivo) return;
-    pintarCargando(overlay, "Guardando...");
+    pintarCargando(overlay, "Guardando... no cierre esta ventana");
     try {
       await estado.onGuardar(archivo, archivo.name);
-      pintarExito(overlay, "Documento guardado");
+      pintarExito(overlay, "Listo, documento guardado");
       setTimeout(cerrar, 900);
     } catch (err) {
       pintarError(overlay, err.message || "No se pudo guardar el documento.", cerrar);

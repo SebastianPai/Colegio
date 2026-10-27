@@ -66,6 +66,8 @@ def a_schema(auditoria: models.AuditoriaSapred) -> schemas.AuditoriaSapred:
         anio_lectivo=auditoria.anio_lectivo,
         periodo=auditoria.periodo,
         grado=auditoria.grado,
+        periodos=auditoria.periodos or [auditoria.periodo],
+        grados=auditoria.grados or ([auditoria.grado] if auditoria.grado is not None else []),
         tipo=getattr(auditoria, "tipo", "notas") or "notas",
         estado=auditoria.estado,
         sede_actual=auditoria.sede_actual,
@@ -90,12 +92,17 @@ SAPRED_GRADOS = {
 }
 
 
-def _partir_etiqueta_sede(etiqueta: str) -> tuple[str, int | None]:
-    """'SEDE # 01 I.E.T.A.B.A. (PRIMERO)' -> ('SEDE # 01 I.E.T.A.B.A.', 1)."""
+def _partir_etiqueta_sede(etiqueta: str) -> tuple[str, int | None, int | None]:
+    """'SEDE # 01 I.E.T.A.B.A. (PRIMERO)' -> ('SEDE # 01 I.E.T.A.B.A.', 1, None).
+    Las corridas de varios periodos lo marcan adentro:
+    'SEDE # 01 I.E.T.A.B.A. (PRIMERO · periodo 3)' -> (..., 1, 3)."""
     m = re.match(r"^(.*?)\s*\(([^)]+)\)\s*$", etiqueta or "")
     if not m:
-        return (etiqueta or "").strip(), None
-    return m.group(1).strip(), SAPRED_GRADOS.get(m.group(2).strip().upper())
+        return (etiqueta or "").strip(), None, None
+    partes = [x.strip() for x in m.group(2).split("·")]
+    grado = SAPRED_GRADOS.get(partes[0].upper())
+    m_periodo = re.search(r"periodo\s*(\d)", " ".join(partes[1:]), re.I)
+    return m.group(1).strip(), grado, int(m_periodo.group(1)) if m_periodo else None
 
 
 def scope_reintento(db: Session, auditoria: models.AuditoriaSapred) -> dict | None:
@@ -111,10 +118,12 @@ def scope_reintento(db: Session, auditoria: models.AuditoriaSapred) -> dict | No
 
     nombres: set[str] = set()
     grados: set[int | None] = set()
+    periodos: set[int] = set()
     for d in fallidas:
-        nombre, grado = _partir_etiqueta_sede(d.sede)
+        nombre, grado, periodo = _partir_etiqueta_sede(d.sede)
         nombres.add(nombre)
         grados.add(grado)
+        periodos.add(periodo if periodo is not None else auditoria.periodo)
 
     por_nombre = {s.nombre: s.id for s in db.scalars(select(models.Sede)).all()}
     sede_ids = sorted({por_nombre[n] for n in nombres if n in por_nombre})
@@ -124,16 +133,14 @@ def scope_reintento(db: Session, auditoria: models.AuditoriaSapred) -> dict | No
             "vuelve a lanzar la auditoría manualmente."
         )
 
-    # Solo se puede acotar a un grado si TODOS los fallos son del mismo (el
-    # subproceso acepta un único --grado). Si son varios, se reintenta el grado
-    # completo de esas sedes.
-    grado = grados.pop() if len(grados) == 1 and None not in grados else None
+    # Se acota a los grados y periodos que fallaron (el subproceso acepta
+    # varios). Si de algún fallo no se supo el grado, se reintentan todos.
     return {
         "anio_lectivo": auditoria.anio_lectivo,
-        "periodo": auditoria.periodo,
+        "periodos": sorted(periodos),
         "tipo": getattr(auditoria, "tipo", "notas") or "notas",
         "sede_ids": sede_ids,
-        "grado": grado,
+        "grados": None if None in grados else sorted(grados),
         "n_fallidas": len(fallidas),
         "sedes_fallidas": sorted(nombres),
     }
@@ -172,6 +179,8 @@ def crear_auditoria(db: Session, datos: schemas.AuditoriaSapredCrear) -> models.
         anio_lectivo=anio,
         periodo=datos.periodo,
         grado=datos.grado,
+        periodos=",".join(str(p) for p in datos.periodos) if len(datos.periodos) > 1 else None,
+        grados=",".join(str(g) for g in datos.grados) if datos.grados and len(datos.grados) > 1 else None,
         tipo=tipo,
         sede_ids=",".join(str(i) for i in datos.sede_ids) if datos.sede_ids else None,
         estado="pendiente",
@@ -244,7 +253,11 @@ def _popen_script(
         f"--audit-id={auditoria.id}",
         f"--periodo={auditoria.periodo}",
     ]
-    if auditoria.grado is not None:
+    if auditoria.periodos:
+        args.append(f"--periodos={auditoria.periodos}")
+    if auditoria.grados:
+        args.append(f"--grados={auditoria.grados}")
+    elif auditoria.grado is not None:
         args.append(f"--grado={auditoria.grado}")
     if auditoria.sede_ids:
         args.append(f"--sedes={auditoria.sede_ids}")

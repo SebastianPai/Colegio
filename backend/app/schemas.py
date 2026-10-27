@@ -1,6 +1,6 @@
 import datetime as dt
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 
 class SedeBase(BaseModel):
@@ -38,12 +38,22 @@ class ReporteSede(BaseModel):
     mujeres: int
 
 
+class ReporteNivel(BaseModel):
+    clave: str
+    nombre: str
+    grados: str
+    total_estudiantes: int
+    hombres: int
+    mujeres: int
+
+
 class ReporteGeneral(BaseModel):
     total_sedes: int
     total_estudiantes: int
     hombres: int
     mujeres: int
     por_sede: list[ReporteSede]
+    por_nivel: list[ReporteNivel] = []
 
 
 class EstudianteBase(BaseModel):
@@ -69,6 +79,16 @@ class EstudianteBase(BaseModel):
 
 class EstudianteCreate(EstudianteBase):
     pass
+
+
+class MatriculaNuevaSolicitud(BaseModel):
+    """Matrícula → estudiante nuevo: los datos del estudiante y, en `campos_ficha`,
+    lo de la ficha de matrícula con los mismos nombres de casilla que usa la
+    ficha oficial (datos_ficha.campos_a_datos: acudiente, resguardo, etnia,
+    awapit_si/no, discapacidad, ingreso_dia/mes/anio...)."""
+
+    estudiante: EstudianteCreate
+    campos_ficha: dict[str, str] = {}
 
 
 class EstudianteUpdate(BaseModel):
@@ -99,6 +119,9 @@ class FotoEstudiante(BaseModel):
     anio_lectivo: int | None
     orden: int
     es_pdf: bool = False
+    subido_en: dt.datetime | None = None  # UTC (models usa utcnow)
+    tamano_bytes: int | None = None
+    nombre_descarga: str | None = None
 
 
 class HistorialDocumento(BaseModel):
@@ -115,6 +138,11 @@ class Estudiante(EstudianteBase):
     activo: bool
     grupo: str
     verificado_matricula: bool | None = None
+    pendiente_simat: bool = False
+    creado_por_nombre: str | None = None  # quién lo matriculó aquí (Matrícula → nuevo)
+    creado_en: dt.datetime | None = None
+    matricula_nueva_este_anio: bool = False
+    anio_ficha_matricula: int | None = None  # año escolar de su ficha de matrícula
     sede: Sede | None = None
     fotos: list[FotoEstudiante] = []
     historial_documento: list[HistorialDocumento] = []
@@ -140,6 +168,39 @@ class ConstanciaSolicitud(BaseModel):
     fecha_expedicion: dt.date
     proposito: str
     tipo_documento: str | None = None  # si se manda, sobreescribe el del estudiante solo para esta constancia
+
+
+class PazYSalvoEstudiante(BaseModel):
+    id: int
+    nombre_completo: str
+    documento: str
+    tipo_documento: str | None
+    lugar_expedicion: str | None
+    genero: str | None
+    sede_id: int
+    sede_nombre: str
+    grupo: str
+
+
+class PazYSalvoSolicitud(BaseModel):
+    estudiante_ids: list[int]
+    fecha_expedicion: dt.date
+    # Lugar de expedición del documento escrito en pantalla, por estudiante.
+    # Si el estudiante no lo tenía guardado, se le guarda.
+    lugares: dict[int, str] = {}
+
+
+class PazYSalvoEstudianteSolicitud(BaseModel):
+    estudiante_id: int
+    lugar_expedicion: str = ""
+    fecha_expedicion: dt.date
+    tipo_documento: str | None = None  # si se manda, reemplaza el del estudiante solo para este paz y salvo
+
+
+class PazYSalvoResultado(BaseModel):
+    estudiantes: int
+    archivo: str  # nombre para /api/certificados/paz-y-salvo/descargar/{archivo}
+    pdf: bool  # si Word pudo convertirlo también a PDF
 
 
 class FichaMatriculaSolicitud(BaseModel):
@@ -439,10 +500,25 @@ class ImportacionBoletinPdfHistorial(BaseModel):
     error: str | None = None
 
 
+def _lista_enteros(valor):
+    """'1,2,3' (como se guarda en la base) o [1, 2, 3] -> [1, 2, 3]."""
+    if valor is None or valor == "":
+        return []
+    if isinstance(valor, str):
+        return [int(x) for x in valor.split(",") if x.strip()]
+    return list(valor)
+
+
 class AuditoriaSapredCrear(BaseModel):
     anio_lectivo: int | None = None
-    periodo: int
-    grado: int | None = None  # None = todos los grados
+    # Uno o varios periodos. `periodo` solo se conserva para los clientes
+    # viejos: si llega `periodos`, manda esa lista.
+    periodo: int | None = None
+    periodos: list[int] | None = None
+    # None / vacío = todos los grados. `grados` permite escoger varios (ej.
+    # 5, 7 y 9); `grado` es la forma vieja de escoger uno solo.
+    grado: int | None = None
+    grados: list[int] | None = None
     sede_ids: list[int] | None = None  # None = todas las sedes IETABA
     tipo: str = "notas"  # notas (Consolidado) | boletin (Boletín informativo) | ambos | boletin_pdf
     # Credenciales de SAPRED: SOLO se usan para esta corrida (se pasan al
@@ -450,6 +526,21 @@ class AuditoriaSapredCrear(BaseModel):
     # logs. Si se dejan vacías, el usuario inicia sesión a mano como siempre.
     usuario: str | None = None
     clave: str | None = None
+
+    @model_validator(mode="after")
+    def _normalizar_periodos_y_grados(self):
+        periodos = sorted(set(self.periodos or ([self.periodo] if self.periodo is not None else [])))
+        if not periodos:
+            raise ValueError("Escoge al menos un periodo.")
+        if any(p not in (1, 2, 3, 4) for p in periodos):
+            raise ValueError("Los periodos van del 1 al 4.")
+        grados = sorted(set(self.grados or ([self.grado] if self.grado is not None else [])))
+        if any(g < 0 or g > 11 for g in grados):
+            raise ValueError("Los grados van de 0 (Transición) a 11 (Once).")
+        self.periodos, self.periodo = periodos, periodos[0]
+        self.grados = grados or None
+        self.grado = grados[0] if len(grados) == 1 else None
+        return self
 
 
 class AuditoriaSapredDetalleSede(BaseModel):
@@ -480,6 +571,8 @@ class AuditoriaSapred(BaseModel):
     anio_lectivo: int
     periodo: int
     grado: int | None
+    periodos: list[int] = []  # [] en corridas viejas: solo `periodo`
+    grados: list[int] = []  # [] = todos los grados (o solo `grado`)
     tipo: str = "notas"
     estado: str
     sede_actual: str | None
@@ -491,6 +584,33 @@ class AuditoriaSapred(BaseModel):
     carpeta_salida: str | None = None
     detalle_sedes: list[AuditoriaSapredDetalleSede] = []
     error: str | None = None
+
+    @field_validator("periodos", "grados", mode="before")
+    @classmethod
+    def _desde_texto(cls, valor):
+        return _lista_enteros(valor)
+
+
+class DocentePeriodo(BaseModel):
+    docente_id: int | None  # None = el nombre del boletín no coincide con ningún docente de la base
+    docente_nombre: str | None
+    nombre_sapred: str  # tal cual lo trae el boletín
+
+
+class DocenteMateriaPeriodos(BaseModel):
+    """Una materia de un grupo, con su profesor en cada periodo importado."""
+
+    sede_id: int
+    sede_nombre: str
+    grado: int
+    curso: int | None
+    area_id: int | None  # None = director de grupo
+    area_codigo: str | None
+    area_nombre: str
+    asignado_anio: str | None  # el docente asignado para el año (panel docente, reportes)
+    periodos: dict[int, DocentePeriodo] = {}
+    cambia: bool = False  # no es el mismo profesor en todos los periodos
+    sin_docente: bool = False  # en algún periodo el nombre no se pudo enlazar
 
 
 class ParteBoletinSede(BaseModel):

@@ -2,11 +2,12 @@
 // Módulo con navegación interna propia, mismo patrón que Boletines/Notas:
 // Resumen (lo que ya existía) | Conciliación (nuevo).
 
-let seccionReportes = "resumen"; // resumen | lista | conciliacion
+let seccionReportes = "resumen"; // resumen | lista | asistencia | docentes | conciliacion
 
 const SECCIONES_REPORTES = [
   { id: "resumen", label: "Resumen" },
   { id: "lista", label: "Lista de estudiantes" },
+  { id: "asistencia", label: "Listas de asistencia" },
   { id: "docentes", label: "Lista de docentes" },
   { id: "conciliacion", label: "Conciliación SIMAC <i data-lucide=arrow-left-right class=ico></i> SAPRED" },
 ];
@@ -16,7 +17,7 @@ async function renderReportes() {
     <div class="pagina-header">
       <div>
         <h1>Reportes</h1>
-        <p class="subtitulo-pagina">Indicadores institucionales y conciliación entre sistemas.</p>
+        <p class="subtitulo-pagina">Listas para imprimir, indicadores y conciliación SIMAC–SAPRED.</p>
       </div>
     </div>
     <nav class="subnav-modulo" aria-label="Secciones de Reportes">
@@ -24,7 +25,7 @@ async function renderReportes() {
         (s) => `<button type="button" class="subnav-item ${seccionReportes === s.id ? "activo" : ""}" data-seccion-reportes="${s.id}">${s.label}</button>`
       ).join("")}
     </nav>
-    <div id="contenido-reportes" class="estado-carga">Cargando...</div>
+    <div id="contenido-reportes" class="rep"><p class="estado-carga">Cargando...</p></div>
   `;
   document.querySelectorAll("[data-seccion-reportes]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -35,6 +36,7 @@ async function renderReportes() {
 
   if (seccionReportes === "conciliacion") return renderSeccionConciliacion();
   if (seccionReportes === "lista") return renderSeccionListaCupo();
+  if (seccionReportes === "asistencia") return renderSeccionListasAsistencia();
   if (seccionReportes === "docentes") return renderSeccionListaDocentes();
   return renderSeccionResumenInstitucional();
 }
@@ -268,13 +270,13 @@ function pintarListaCupo(contenedor, sedes, estudiantes, conteos) {
   const accionesFila = (e) => {
     const b = [];
     if (listaCupoVista === "activos") {
-      b.push(`<button type="button" class="boton secundario" data-lista-accion="posible" data-lista-id="${e.id}" title="Sigue en el sistema pero no cuenta en pendientes de boletín">Posible retiro</button>`);
+      b.push(`<button type="button" class="rep-accion" data-lista-accion="posible" data-lista-id="${e.id}" title="Sigue en el sistema pero no cuenta en pendientes de boletín">Posible retiro</button>`);
     }
     if (listaCupoVista !== "retirados") {
-      b.push(`<button type="button" class="boton secundario" data-lista-accion="retirado" data-lista-id="${e.id}" title="Queda marcado como retirado (no se borra ni se retira del sistema)">Retirado</button>`);
+      b.push(`<button type="button" class="rep-accion" data-lista-accion="retirado" data-lista-id="${e.id}" title="Queda marcado como retirado (no se borra ni se retira del sistema)">Retirado</button>`);
     }
     if (listaCupoVista !== "activos") {
-      b.push(`<button type="button" class="boton secundario" data-lista-accion="quitar" data-lista-id="${e.id}" title="Vuelve a ser un estudiante activo normal">Quitar</button>`);
+      b.push(`<button type="button" class="rep-accion" data-lista-accion="quitar" data-lista-id="${e.id}" title="Vuelve a ser un estudiante activo normal">Quitar marca</button>`);
     }
     return b.join(" ");
   };
@@ -288,88 +290,94 @@ function pintarListaCupo(contenedor, sedes, estudiantes, conteos) {
       ).join("")}
     </nav>
 
-    <div class="barra-filtros no-imprimir">
-      <label class="filtro-campo">Sede
-        <select id="select-lista-sede">
-          <option value="" ${listaCupoSede === "" ? "selected" : ""}>Todas las sedes IETABA</option>
-          ${sedes.map((s) => `<option value="${s.id}" ${String(s.id) === listaCupoSede ? "selected" : ""}>${s.nombre}</option>`).join("")}
-        </select>
-      </label>
+    <section class="rep-panel no-imprimir">
+      <div class="rep-panel-fila rep-panel-cab">
+        <div class="rep-filtros">
+          <label class="filtro-campo">Sede
+            <select id="select-lista-sede">
+              <option value="" ${listaCupoSede === "" ? "selected" : ""}>Todas las sedes IETABA</option>
+              ${sedes.map((s) => `<option value="${s.id}" ${String(s.id) === listaCupoSede ? "selected" : ""}>${s.nombre}</option>`).join("")}
+            </select>
+          </label>
+          ${
+            esActivos
+              ? `<label class="filtro-campo">Desde
+                   <select id="select-lista-desde" ${listaCupoGrupos.size ? "disabled" : ""}>
+                     ${NOMBRES_GRADOS.map(([n, nombre]) => `<option value="${n}" ${n === listaCupoDesdeGrado ? "selected" : ""}>${nombre}</option>`).join("")}
+                   </select>
+                 </label>
+                 <label class="filtro-campo">Hasta
+                   <select id="select-lista-hasta" ${listaCupoGrupos.size ? "disabled" : ""}>
+                     ${NOMBRES_GRADOS.map(([n, nombre]) => `<option value="${n}" ${n === listaCupoHastaGrado ? "selected" : ""}>${nombre}</option>`).join("")}
+                   </select>
+                 </label>
+                 <label class="filtro-campo rep-campo-corto">Cantidad
+                   <input type="number" id="input-lista-cantidad" value="${listaCupoCantidad}" min="1" step="1" ${listaCupoSinLimite ? "disabled" : ""} />
+                 </label>
+                 <label class="rep-chip"><input type="checkbox" id="check-lista-sin-limite" ${listaCupoSinLimite ? "checked" : ""} /> Sin límite</label>`
+              : ""
+          }
+        </div>
+        <div class="rep-acciones">
+          <button type="button" class="boton secundario" onclick="window.print()"><i data-lucide=printer class=ico></i> Imprimir</button>
+          <button type="button" class="boton" id="btn-lista-pdf" ${lista.length ? "" : "disabled"}><i data-lucide=file-text class=ico></i> Descargar PDF</button>
+        </div>
+      </div>
       ${
         esActivos
-          ? `<label class="filtro-campo">Desde el grado
-               <select id="select-lista-desde" ${listaCupoGrupos.size ? "disabled" : ""}>
-                 ${NOMBRES_GRADOS.map(([n, nombre]) => `<option value="${n}" ${n === listaCupoDesdeGrado ? "selected" : ""}>${nombre}</option>`).join("")}
-               </select>
-             </label>
-             <label class="filtro-campo">Hasta el grado
-               <select id="select-lista-hasta" ${listaCupoGrupos.size ? "disabled" : ""}>
-                 ${NOMBRES_GRADOS.map(([n, nombre]) => `<option value="${n}" ${n === listaCupoHastaGrado ? "selected" : ""}>${nombre}</option>`).join("")}
-               </select>
-             </label>
-             <label class="filtro-campo">Cantidad de estudiantes
-               <input type="number" id="input-lista-cantidad" value="${listaCupoCantidad}" min="1" step="1" ${listaCupoSinLimite ? "disabled" : ""} />
-             </label>
-             <label class="check-linea filtro-check">
-               <input type="checkbox" id="check-lista-sin-limite" ${listaCupoSinLimite ? "checked" : ""} /> Sin límite (todos los que cumplan)
-             </label>`
+          ? `<div class="rep-panel-fila">
+               <span class="rep-etq">Incluir</span>
+               <div class="rep-chips">
+                 <label class="rep-chip"><input type="checkbox" data-lista-incluir="posibles" ${listaCupoIncluir.posibles ? "checked" : ""} /> Posibles retiros</label>
+                 <label class="rep-chip"><input type="checkbox" data-lista-incluir="retirados" ${listaCupoIncluir.retirados ? "checked" : ""} /> Retirados</label>
+                 <label class="rep-chip"><input type="checkbox" data-lista-incluir="sinGrupo" ${listaCupoIncluir.sinGrupo ? "checked" : ""} /> Sin grupo asignado</label>
+               </div>
+             </div>
+             <div class="rep-panel-fila">
+               <span class="rep-etq">Grupos</span>
+               <details class="rep-grupos" ${listaCupoGrupos.size ? "open" : ""}>
+                 <summary>${listaCupoGrupos.size ? `${listaCupoGrupos.size} escogido(s): ${gruposEscogidosTxt}` : "Todos los del rango de grados · escoger grupos"}</summary>
+                 <div class="rep-grupos-cuerpo">
+                   <div class="rep-grupos-escribir">
+                     <input type="text" id="input-grupos-texto" aria-label="Escribir grupos" placeholder="Escriba los grupos, ej: 4-2, 3-2 (o 4 = todo Cuarto)" value="${[...listaCupoGrupos].map(claveATextoGrupo).join(", ")}" />
+                     <button type="button" class="boton secundario" id="btn-grupos-aplicar">Aplicar</button>
+                     ${listaCupoGrupos.size ? '<button type="button" class="docs-link" id="btn-grupos-limpiar">Volver a todos</button>' : ""}
+                   </div>
+                   ${[...new Set(gruposDisponibles.map((g) => g.grado))]
+                     .sort((a, b) => a - b)
+                     .map((grado) => {
+                       const delGrado = gruposDisponibles.filter((g) => g.grado === grado);
+                       const todos = delGrado.every((g) => listaCupoGrupos.has(g.clave));
+                       return `<div class="rep-grupos-grado">
+                         <button type="button" class="rep-grado ${todos ? "activo" : ""}" data-grado-todos="${grado}" title="Escoger o quitar todo el grado">${nombreGradoLista(grado)}</button>
+                         <div class="rep-chips">${delGrado
+                           .map(
+                             (g) => `<label class="rep-chip"><input type="checkbox" data-grupo-lista="${g.clave}" ${
+                               listaCupoGrupos.has(g.clave) ? "checked" : ""
+                             } /> ${esc(g.etiqueta)} <span class="rep-chip-n">${g.total}</span></label>`
+                           )
+                           .join("")}</div>
+                       </div>`;
+                     })
+                     .join("")}
+                 </div>
+               </details>
+             </div>`
           : ""
       }
-      <button type="button" class="boton" id="btn-lista-pdf" ${lista.length ? "" : "disabled"}><i data-lucide=file-text class=ico></i> Descargar PDF</button>
-      <button type="button" class="boton secundario" onclick="window.print()"><i data-lucide=printer class=ico></i> Imprimir</button>
-    </div>
+      <div class="rep-panel-fila">
+        <span class="rep-etq">Columnas</span>
+        <div class="rep-chips">
+          ${COLUMNAS_LISTA_CUPO.map(
+            (c) => `<label class="rep-chip"><input type="checkbox" data-lista-columna="${c.id}" ${listaCupoColumnas.includes(c.id) ? "checked" : ""} /> ${c.label}</label>`
+          ).join("")}
+        </div>
+      </div>
+    </section>
 
-    ${
-      esActivos
-        ? `<div class="barra-filtros no-imprimir">
-             <strong>Incluir también:</strong>
-             <label class="check-linea filtro-check"><input type="checkbox" data-lista-incluir="posibles" ${listaCupoIncluir.posibles ? "checked" : ""} /> <i data-lucide=door-open class=ico></i> Posibles retiros</label>
-             <label class="check-linea filtro-check"><input type="checkbox" data-lista-incluir="retirados" ${listaCupoIncluir.retirados ? "checked" : ""} /> <i data-lucide=x class=ico></i> Retirados</label>
-             <label class="check-linea filtro-check"><input type="checkbox" data-lista-incluir="sinGrupo" ${listaCupoIncluir.sinGrupo ? "checked" : ""} /> Sin grupo asignado</label>
-           </div>
-
-           <details class="seccion-colapsable no-imprimir" ${listaCupoGrupos.size ? "open" : ""}>
-             <summary>Grados y grupos a imprimir — ${
-               listaCupoGrupos.size ? `${listaCupoGrupos.size} escogido(s): ${gruposEscogidosTxt}` : "todos los del rango de grados"
-             }</summary>
-             <div class="toolbar">
-               <label class="filtro-campo">Escribe los grupos
-                 <input type="text" id="input-grupos-texto" placeholder="Ej: 4-2, 3-2 (o 4 = todo Cuarto)" value="${[...listaCupoGrupos].map(claveATextoGrupo).join(", ")}" />
-               </label>
-               <button type="button" class="boton secundario" id="btn-grupos-aplicar">Aplicar</button>
-               <button type="button" class="boton secundario" id="btn-grupos-limpiar">Todos (usar el rango de grados)</button>
-             </div>
-             ${[...new Set(gruposDisponibles.map((g) => g.grado))]
-               .sort((a, b) => a - b)
-               .map((grado) => {
-                 const delGrado = gruposDisponibles.filter((g) => g.grado === grado);
-                 const todos = delGrado.every((g) => listaCupoGrupos.has(g.clave));
-                 return `<div class="fila-grupos-lista">
-                   <button type="button" class="boton-texto-chico" data-grado-todos="${grado}">${todos ? "<i data-lucide=check class=ico></i> " : ""}${nombreGradoLista(grado)} (todo el grado)</button>
-                   ${delGrado
-                     .map(
-                       (g) => `<label class="check-linea filtro-check"><input type="checkbox" data-grupo-lista="${g.clave}" ${
-                         listaCupoGrupos.has(g.clave) ? "checked" : ""
-                       } /> ${esc(g.etiqueta)} <span class="pendiente">(${g.total})</span></label>`
-                     )
-                     .join("")}
-                 </div>`;
-               })
-               .join("")}
-           </details>`
-        : ""
-    }
-
-    <div class="barra-filtros no-imprimir">
-      <strong>Columnas:</strong>
-      ${COLUMNAS_LISTA_CUPO.map(
-        (c) => `<label class="check-linea filtro-check"><input type="checkbox" data-lista-columna="${c.id}" ${listaCupoColumnas.includes(c.id) ? "checked" : ""} /> ${c.label}</label>`
-      ).join("")}
-    </div>
-
-    <div class="hoja-imprimir">
-      <h2 style="margin:6px 0">${titulo}</h2>
-      <p class="pendiente">${sedeNombre}${
+    <div class="hoja-imprimir rep-hoja">
+      <h2 class="rep-hoja-titulo">${titulo}</h2>
+      <p class="rep-hoja-sub">${sedeNombre}${
         esActivos
           ? ` · ${
               [
@@ -389,11 +397,11 @@ function pintarListaCupo(contenedor, sedes, estudiantes, conteos) {
             }`
           : ""
       }</p>
-      ${esActivos ? `<p>${notaCorte}</p>` : `<p class="conteo-resultados">${lista.length} estudiante(s)</p>`}
+      ${esActivos ? `<p class="rep-hoja-nota">${notaCorte}</p>` : `<p class="rep-hoja-nota">${lista.length} estudiante(s)</p>`}
       ${
         esActivos && porGrado.size
-          ? `<div class="resumen-reportes">${[...porGrado.entries()]
-              .map(([g, n]) => `<div class="metric-card"><span>${nombreGradoLista(g)}</span><strong>${n}</strong></div>`)
+          ? `<div class="rep-por-grado">${[...porGrado.entries()]
+              .map(([g, n]) => `<span><b>${n}</b> ${nombreGradoLista(g)}</span>`)
               .join("")}</div>`
           : ""
       }
@@ -408,7 +416,7 @@ function pintarListaCupo(contenedor, sedes, estudiantes, conteos) {
 
       ${
         lista.length
-          ? `<div class="tabla-scroll"><table>
+          ? `<div class="tabla-scroll"><table class="rep-tabla">
                <thead><tr>
                  <th class="no-imprimir"><input type="checkbox" id="check-lista-todos" ${lista.length && listaCupoSeleccion.size === lista.length ? "checked" : ""} title="Seleccionar todos" /></th>
                  <th>#</th>${columnas.map((c) => `<th>${esc(c.label)}</th>`).join("")}<th class="no-imprimir"></th>
@@ -671,7 +679,8 @@ function vincularListaCupo(contenedor, sedes, lista) {
 // escogen las columnas a mostrar/exportar, mismo patrón que Lista de estudiantes.
 
 let listaDocentesSede = ""; // "" = todas las sedes IETABA
-let listaDocentesVista = "todos"; // todos | responsables
+let listaDocentesVista = "todos"; // todos | responsables | grados
+let listaDocentesGrados = [10, 11]; // pestaña "Por grado": qué grados (se recuerda mientras dure la sesión)
 let listaDocentesSedeInicializada = false;
 
 function rolDocenteTexto(d) {
@@ -744,7 +753,18 @@ async function cargarYPintarListaDocentes(contenedor, sedes) {
   pintarListaDocentes(contenedor, sedes, docentes);
 }
 
+function subnavListaDocentesHtml(docentes) {
+  const totalResponsables = docentes.filter((d) => d.es_responsable_grupo).length;
+  return `
+    <nav class="subnav-modulo no-imprimir">
+      <button type="button" class="subnav-item ${listaDocentesVista === "todos" ? "activo" : ""}" data-vista-docentes="todos">Todos (${docentes.length})</button>
+      <button type="button" class="subnav-item ${listaDocentesVista === "responsables" ? "activo" : ""}" data-vista-docentes="responsables">Directores de grupo (${totalResponsables})</button>
+      <button type="button" class="subnav-item ${listaDocentesVista === "grados" ? "activo" : ""}" data-vista-docentes="grados">Por grado</button>
+    </nav>`;
+}
+
 function pintarListaDocentes(contenedor, sedes, docentes) {
+  if (listaDocentesVista === "grados") return pintarDocentesPorGrado(contenedor, sedes, docentes);
   const totalResponsables = docentes.filter((d) => d.es_responsable_grupo).length;
   const lista = listaDocentesVista === "responsables" ? docentes.filter((d) => d.es_responsable_grupo) : docentes;
 
@@ -761,36 +781,40 @@ function pintarListaDocentes(contenedor, sedes, docentes) {
   const titulo = soloUnaSede ? `${base} — ${sedeNombre} (${lista.length})` : `${base} — ${lista.length}`;
 
   contenedor.innerHTML = `
-    <nav class="subnav-modulo no-imprimir">
-      <button type="button" class="subnav-item ${listaDocentesVista === "todos" ? "activo" : ""}" data-vista-docentes="todos">Todos (${docentes.length})</button>
-      <button type="button" class="subnav-item ${listaDocentesVista === "responsables" ? "activo" : ""}" data-vista-docentes="responsables">Solo directores/responsables de grupo (${totalResponsables})</button>
-    </nav>
+    ${subnavListaDocentesHtml(docentes)}
 
-    <div class="barra-filtros no-imprimir">
-      <label class="filtro-campo">Sede
-        <select id="select-docentes-sede">
-          <option value="" ${listaDocentesSede === "" ? "selected" : ""}>Todas las sedes IETABA</option>
-          ${sedes.map((s) => `<option value="${s.id}" ${String(s.id) === listaDocentesSede ? "selected" : ""}>${s.nombre}</option>`).join("")}
-        </select>
-      </label>
-      <button type="button" class="boton" id="btn-docentes-pdf" ${lista.length ? "" : "disabled"}><i data-lucide=file-text class=ico></i> Descargar PDF</button>
-      <button type="button" class="boton secundario" onclick="window.print()"><i data-lucide=printer class=ico></i> Imprimir</button>
-    </div>
+    <section class="rep-panel no-imprimir">
+      <div class="rep-panel-fila rep-panel-cab">
+        <div class="rep-filtros">
+          <label class="filtro-campo">Sede
+            <select id="select-docentes-sede">
+              <option value="" ${listaDocentesSede === "" ? "selected" : ""}>Todas las sedes IETABA</option>
+              ${sedes.map((s) => `<option value="${s.id}" ${String(s.id) === listaDocentesSede ? "selected" : ""}>${s.nombre}</option>`).join("")}
+            </select>
+          </label>
+        </div>
+        <div class="rep-acciones">
+          <button type="button" class="boton secundario" onclick="window.print()"><i data-lucide=printer class=ico></i> Imprimir</button>
+          <button type="button" class="boton" id="btn-docentes-pdf" ${lista.length ? "" : "disabled"}><i data-lucide=file-text class=ico></i> Descargar PDF</button>
+        </div>
+      </div>
+      <div class="rep-panel-fila">
+        <span class="rep-etq">Columnas</span>
+        <div class="rep-chips">
+          ${COLUMNAS_LISTA_DOCENTES.map((c) => {
+            const deshabilitada = soloUnaSede && c.id === "sede";
+            return `<label class="rep-chip" ${deshabilitada ? 'title="Ya está en el título: solo aplica con «Todas las sedes IETABA»"' : ""}><input type="checkbox" data-docentes-columna="${c.id}" ${listaDocentesColumnas.includes(c.id) ? "checked" : ""} ${deshabilitada ? "disabled" : ""} /> ${c.label}</label>`;
+          }).join("")}
+        </div>
+      </div>
+    </section>
 
-    <div class="barra-filtros no-imprimir">
-      <strong>Columnas:</strong>
-      ${COLUMNAS_LISTA_DOCENTES.map((c) => {
-        const deshabilitada = soloUnaSede && c.id === "sede";
-        return `<label class="check-linea filtro-check" ${deshabilitada ? 'title="Ya está en el título, arriba: solo aplica con \'Todas las sedes IETABA\'"' : ""}><input type="checkbox" data-docentes-columna="${c.id}" ${listaDocentesColumnas.includes(c.id) ? "checked" : ""} ${deshabilitada ? "disabled" : ""} /> ${c.label}</label>`;
-      }).join("")}
-    </div>
-
-    <div class="hoja-imprimir">
-      <h2 style="margin:6px 0">${titulo}</h2>
-      ${soloUnaSede ? "" : `<p class="pendiente">${sedeNombre}</p>`}
+    <div class="hoja-imprimir rep-hoja">
+      <h2 class="rep-hoja-titulo">${titulo}</h2>
+      ${soloUnaSede ? "" : `<p class="rep-hoja-sub">${sedeNombre}</p>`}
       ${
         lista.length
-          ? `<div class="tabla-scroll"><table>
+          ? `<div class="tabla-scroll"><table class="rep-tabla">
                <thead><tr><th>#</th>${columnas.map((c) => `<th${CELDA_NOWRAP_DOCENTES.has(c.id) ? ' class="celda-nowrap"' : ""}>${esc(c.label)}</th>`).join("")}</tr></thead>
                <tbody>
                  ${lista
@@ -850,6 +874,96 @@ function pintarListaDocentes(contenedor, sedes, docentes) {
   });
 }
 
+// --- Lista de docentes → Por grado -----------------------------------------
+// Quién dicta en los grados escogidos (ej. Décimo y Once), con cada materia y
+// sus grupos. Junta asignaciones y horario (crud.docentes_por_grados): un
+// grupo con * está en el horario pero no tiene la asignación registrada.
+
+async function pintarDocentesPorGrado(contenedor, sedes, docentesTodos) {
+  const params = new URLSearchParams({ grados: listaDocentesGrados.join(",") });
+  if (listaDocentesSede) params.set("sede_id", listaDocentesSede);
+  let docentes = [];
+  let error = "";
+  if (listaDocentesGrados.length) {
+    try {
+      docentes = await api(`/api/reportes/docentes-por-grado?${params}`);
+    } catch (err) {
+      error = err.message;
+    }
+  }
+  const sedeNombre = listaDocentesSede ? (sedes.find((s) => String(s.id) === listaDocentesSede) || {}).nombre : "Todas las sedes IETABA";
+  const nombres = listaDocentesGrados.map((g) => (NOMBRES_GRADOS.find(([n]) => n === g) || [null, g])[1]);
+  const gradosTxt = nombres.length > 1 ? `${nombres.slice(0, -1).join(", ")} y ${nombres[nombres.length - 1]}` : nombres.join("");
+  const nMaterias = new Set(docentes.flatMap((d) => d.materias.map((m) => m.area))).size;
+  const haySoloHorario = docentes.some((d) => d.materias.some((m) => m.grupos.some((g) => g.solo_horario)));
+
+  contenedor.innerHTML = `
+    ${subnavListaDocentesHtml(docentesTodos)}
+    <section class="rep-panel no-imprimir">
+      <div class="rep-panel-fila rep-panel-cab">
+        <div class="rep-filtros">
+          <label class="filtro-campo">Sede
+            <select id="select-docentes-sede">
+              <option value="" ${listaDocentesSede === "" ? "selected" : ""}>Todas las sedes IETABA</option>
+              ${sedes.map((s) => `<option value="${s.id}" ${String(s.id) === listaDocentesSede ? "selected" : ""}>${s.nombre}</option>`).join("")}
+            </select>
+          </label>
+        </div>
+        <div class="rep-acciones">
+          <button type="button" class="boton secundario" onclick="window.print()"><i data-lucide=printer class=ico></i> Imprimir</button>
+          <a class="boton ${docentes.length ? "" : "deshabilitado"}" ${docentes.length ? `href="/api/reportes/docentes-por-grado/pdf?${params}" target="_blank" rel="noopener"` : 'aria-disabled="true"'}><i data-lucide=file-text class=ico></i> Descargar PDF</a>
+        </div>
+      </div>
+      <div class="rep-panel-fila">
+        <span class="rep-etq">Grados</span>
+        <div class="rep-chips">
+          ${NOMBRES_GRADOS.map(([n, nombre]) => `<label class="rep-chip"><input type="checkbox" data-docentes-grado="${n}" ${listaDocentesGrados.includes(n) ? "checked" : ""} /> ${nombre}</label>`).join("")}
+        </div>
+      </div>
+    </section>
+
+    <div class="hoja-imprimir rep-hoja">
+      <h2 class="rep-hoja-titulo">Docentes de ${esc(gradosTxt || "—")} (${docentes.length})</h2>
+      <p class="rep-hoja-sub">${esc(sedeNombre)}${docentes.length ? ` · ${nMaterias} materia(s)` : ""}</p>
+      ${error ? `<div class="alerta-caja">${esc(error)}</div>` : !listaDocentesGrados.length
+        ? '<p class="pendiente">Marca al menos un grado.</p>'
+        : docentes.length
+          ? `<div class="tabla-scroll"><table class="rep-tabla">
+               <thead><tr><th>#</th><th>Docente</th><th class="celda-nowrap">Documento</th><th>Materias y grupos</th><th>Director de grupo</th></tr></thead>
+               <tbody>
+                 ${docentes.map((d, i) => `<tr>
+                   <td>${i + 1}</td>
+                   <td>${esc(d.nombre_completo)}</td>
+                   <td class="celda-nowrap">${esc(d.documento || "")}</td>
+                   <td>${d.materias.map((m) => `<strong>${esc(m.area)}:</strong> ${m.grupos.map((g) => esc(g.grupo) + (g.solo_horario ? "*" : "")).join(", ")}`).join("<br>") || "—"}</td>
+                   <td>${esc(d.director_de.join(", ")) || "NO"}</td>
+                 </tr>`).join("")}
+               </tbody>
+             </table></div>
+             ${haySoloHorario ? '<p class="pendiente">* Grupo que figura en el horario pero no tiene la asignación registrada en el sistema.</p>' : ""}`
+          : `<div class="estado-vacio"><div class="estado-vacio-icono"><i data-lucide=check class=ico></i> </div><h3>No hay docentes asignados ni en el horario para esos grados</h3></div>`}
+    </div>
+  `;
+
+  document.getElementById("select-docentes-sede").addEventListener("change", (e) => {
+    listaDocentesSede = e.target.value;
+    cargarYPintarListaDocentes(contenedor, sedes);
+  });
+  contenedor.querySelectorAll("[data-vista-docentes]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      listaDocentesVista = btn.dataset.vistaDocentes;
+      pintarListaDocentes(contenedor, sedes, docentesTodos);
+    })
+  );
+  contenedor.querySelectorAll("[data-docentes-grado]").forEach((chk) =>
+    chk.addEventListener("change", () => {
+      const g = Number(chk.dataset.docentesGrado);
+      listaDocentesGrados = chk.checked ? [...listaDocentesGrados, g].sort((a, b) => a - b) : listaDocentesGrados.filter((x) => x !== g);
+      pintarDocentesPorGrado(contenedor, sedes, docentesTodos);
+    })
+  );
+}
+
 // POST → blob → descarga. Mismo manejo de sesión que descargarPdfListaCupo().
 async function descargarPdfListaDocentes(cuerpo) {
   const pedir = () =>
@@ -875,6 +989,121 @@ async function descargarPdfListaDocentes(cuerpo) {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
+// --- Sección: Listas de asistencia (varios grupos de una vez) ---------------
+// El formato oficial del Excel "LISTA DE ASISTENCIA ... X GRADOS", en un solo
+// PDF: oficio horizontal y una hoja por grupo, ya a la medida (se imprime al
+// 100 %, sin bajar la escala). Se escriben los grupos: "10, 11, 2, 4-2" o
+// "6 a 9" (backend/app/lista_asistencia_pdf.py: parsear_grupos).
+
+let asistListaSede = null;
+let asistListaGrupos = "";
+let asistListaMes = new Date().getMonth() + 1;
+
+async function renderSeccionListasAsistencia() {
+  const contenedor = document.getElementById("contenido-reportes");
+  const sedes = await api("/api/sedes");
+  if (asistListaSede === null) {
+    const ietaba = sedes.find((s) => s.nombre.toUpperCase().includes("I.E.T.A.B.A"));
+    asistListaSede = String(ietaba ? ietaba.id : sedes[0]?.id || "");
+  }
+  const grados = asistListaSede ? await api(`/api/sedes/${asistListaSede}/grados`).catch(() => []) : [];
+
+  contenedor.innerHTML = `
+    <section class="rep-panel no-imprimir">
+      <div class="rep-panel-fila rep-panel-cab">
+        <div class="rep-filtros">
+          <label class="filtro-campo">Sede
+            <select id="asist-lista-sede">
+              ${sedes.map((s) => `<option value="${s.id}" ${String(s.id) === asistListaSede ? "selected" : ""}>${esc(s.nombre)}</option>`).join("")}
+            </select>
+          </label>
+          <label class="filtro-campo">Mes
+            <select id="asist-lista-mes">
+              ${MESES.map((m, i) => `<option value="${i + 1}" ${i + 1 === asistListaMes ? "selected" : ""}>${m}</option>`).join("")}
+            </select>
+          </label>
+          <label class="filtro-campo" style="flex:1; min-width:240px">Grados y grupos
+            <input type="text" id="asist-lista-grupos" value="${esc(asistListaGrupos)}" placeholder="Ej: 10, 11, 2, 4-2   ·   6 a 9   ·   todos" />
+          </label>
+        </div>
+        <div class="rep-acciones">
+          <a class="boton deshabilitado" id="asist-lista-pdf" target="_blank" rel="noopener"><i data-lucide=printer class=ico></i> Generar PDF para imprimir</a>
+        </div>
+      </div>
+      <div class="rep-panel-fila">
+        <span class="rep-etq">Agregar</span>
+        <div class="rep-chips">
+          ${grados.map((g) => `
+            <button type="button" class="rep-chip" data-asist-agregar="${g.grado}" title="Todo ${esc(g.nombre_grado)}">${esc(g.nombre_grado)}</button>
+            ${(g.divisiones || []).map((d) => `<button type="button" class="rep-chip" data-asist-agregar="${g.grado}-${d.numero}">${g.grado}-${d.numero}</button>`).join("")}`).join("")}
+          <button type="button" class="rep-chip" data-asist-agregar="todos">Todos</button>
+          <button type="button" class="rep-chip" data-asist-limpiar>Borrar</button>
+        </div>
+      </div>
+      <p class="pendiente" style="margin:6px 0 0">Un número es el grado completo (cada grupo en su hoja), <strong>4-2</strong> es solo ese grupo y
+        <strong>6 a 9</strong> es un rango. Sale un solo PDF en <strong>oficio horizontal</strong>, una hoja por grupo, ya a la medida:
+        imprímalo al <strong>100 %</strong> (tamaño real), sin bajar la escala.</p>
+    </section>
+    <div id="asist-lista-resumen"></div>
+  `;
+
+  const campo = document.getElementById("asist-lista-grupos");
+  const boton = document.getElementById("asist-lista-pdf");
+  const resumen = document.getElementById("asist-lista-resumen");
+  let temporizador;
+  const revisar = async () => {
+    asistListaGrupos = campo.value;
+    boton.classList.add("deshabilitado");
+    boton.removeAttribute("href");
+    if (!campo.value.trim()) {
+      resumen.innerHTML = "";
+      return;
+    }
+    const params = new URLSearchParams({ sede_id: asistListaSede, grupos: campo.value });
+    try {
+      const hojas = await api(`/api/reportes/lista-asistencia/grupos?${params}`);
+      if (campo.value !== asistListaGrupos) return; // ya escribieron otra cosa
+      params.set("mes", asistListaMes);
+      boton.href = `/api/reportes/lista-asistencia/pdf?${params}`;
+      boton.classList.remove("deshabilitado");
+      const total = hojas.reduce((s, h) => s + h.estudiantes, 0);
+      resumen.innerHTML = `
+        <div class="rep-hoja">
+          <h2 class="rep-hoja-titulo">${hojas.length} hoja(s) · ${total} estudiantes</h2>
+          <div class="rep-chips">${hojas.map((h) => `<span class="rep-chip">${esc(h.nombre)} · ${h.estudiantes}</span>`).join("")}</div>
+        </div>`;
+    } catch (err) {
+      resumen.innerHTML = `<div class="alerta-caja">${esc(err.message)}</div>`;
+    }
+  };
+  campo.addEventListener("input", () => {
+    clearTimeout(temporizador);
+    temporizador = setTimeout(revisar, 350);
+  });
+  document.getElementById("asist-lista-sede").addEventListener("change", (e) => {
+    asistListaSede = e.target.value;
+    renderSeccionListasAsistencia();
+  });
+  document.getElementById("asist-lista-mes").addEventListener("change", (e) => {
+    asistListaMes = Number(e.target.value);
+    revisar();
+  });
+  contenedor.querySelectorAll("[data-asist-agregar]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const valor = b.dataset.asistAgregar;
+      const actuales = campo.value.split(",").map((x) => x.trim()).filter(Boolean);
+      if (!actuales.includes(valor)) actuales.push(valor);
+      campo.value = actuales.join(", ");
+      revisar();
+    })
+  );
+  contenedor.querySelector("[data-asist-limpiar]").addEventListener("click", () => {
+    campo.value = "";
+    revisar();
+  });
+  if (campo.value.trim()) revisar();
+}
+
 // --- Sección: Resumen institucional (clasificación de sedes) ---------------
 
 async function renderSeccionResumenInstitucional() {
@@ -894,7 +1123,7 @@ async function renderSeccionResumenInstitucional() {
       <div class="metric-card"><span>Mujeres</span><strong>${reporte.mujeres}</strong></div>
     </div>
     <details class="seccion-colapsable">
-      <summary>Clasificación de sedes (${sedes.length} sedes del archivo, ${sedesIetaba} marcadas como IETABA)</summary>
+      <summary>Qué sedes son IETABA <span class="rep-detalle">${sedesIetaba} de ${sedes.length} marcadas · se puede corregir aquí</span></summary>
       <table>
         <thead>
           <tr><th>IETABA</th><th>Sede</th><th>Institucion</th><th>Resguardo</th><th>Activos</th></tr>
@@ -912,10 +1141,37 @@ async function renderSeccionResumenInstitucional() {
         </tbody>
       </table>
     </details>
-    <div class="toolbar reporte-subtitulo">
-      <strong>Resumen por sede IETABA</strong>
-    </div>
-    <table>
+    <section class="rep-hoja">
+    <h2 class="rep-hoja-titulo">Estudiantes activos por nivel</h2>
+    <p class="rep-hoja-sub">Solo las sedes marcadas como IETABA.</p>
+    <div class="tabla-scroll"><table class="rep-tabla">
+      <thead>
+        <tr><th>Nivel</th><th>Grados</th><th>Total activos</th><th>%</th><th>Hombres</th><th>Mujeres</th></tr>
+      </thead>
+      <tbody>
+        ${reporte.por_nivel.map((n) => `
+          <tr>
+            <td>${n.nombre}</td><td>${n.grados}</td><td>${n.total_estudiantes}</td>
+            <td>${reporte.total_estudiantes ? ((n.total_estudiantes * 100) / reporte.total_estudiantes).toFixed(1) : "0.0"}%</td>
+            <td>${n.hombres}</td><td>${n.mujeres}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+      <tfoot>
+        <tr>
+          <th colspan="2">Total</th>
+          <th>${reporte.total_estudiantes}</th>
+          <th>100%</th>
+          <th>${reporte.hombres}</th>
+          <th>${reporte.mujeres}</th>
+        </tr>
+      </tfoot>
+    </table></div>
+    </section>
+    <section class="rep-hoja">
+    <h2 class="rep-hoja-titulo">Estudiantes activos por sede</h2>
+    <p class="rep-hoja-sub">Solo las sedes marcadas como IETABA.</p>
+    <div class="tabla-scroll"><table class="rep-tabla">
       <thead>
         <tr><th>Sede</th><th>Total activos</th><th>Hombres</th><th>Mujeres</th></tr>
       </thead>
@@ -932,7 +1188,8 @@ async function renderSeccionResumenInstitucional() {
           <th>${reporte.mujeres}</th>
         </tr>
       </tfoot>
-    </table>
+    </table></div>
+    </section>
   `;
 
   document.querySelectorAll(".check-ietaba").forEach((check) => {
@@ -1056,20 +1313,10 @@ function pintarConciliacion(contenedor, sedes) {
   const docentesDisponibles = [...new Set(r.grupos.map((g) => g.docente).filter(Boolean))].sort();
 
   contenedor.innerHTML = `
-    <div class="conciliacion-header-info no-imprimir">
-      <span class="conteo-resultados">Última actualización: ${
-        conciliacionUltimaActualizacion ? formatoFechaHoraConciliacion(conciliacionUltimaActualizacion) : "-"
-      }</span>
-      <button type="button" class="boton secundario" id="btn-actualizar-conciliacion"><i data-lucide=refresh-cw class=ico></i> Actualizar conciliación</button>
-      <button type="button" class="boton secundario" id="btn-exportar-conciliacion"><i data-lucide=download class=ico></i> Exportar inconsistencias (Excel)</button>
-      <label class="check-linea filtro-check" title="Por defecto el PDF de presencia solo trae Solo SIMAT / Solo SAPRED">
-        <input type="checkbox" id="check-presencia-incluir-coincide" ${presenciaIncluirCoincide ? "checked" : ""} /> PDF: incluir los que coinciden
-      </label>
-      <button type="button" class="boton" id="btn-presencia-pdf"><i data-lucide=file-text class=ico></i> PDF de presencia (SIMAT/SAPRED)</button>
-    </div>
-
-    <div class="barra-filtros no-imprimir">
-      <label class="filtro-campo">Año lectivo
+    <section class="rep-panel no-imprimir">
+    <div class="rep-panel-fila rep-panel-cab">
+      <div class="rep-filtros">
+      <label class="filtro-campo rep-campo-corto">Año
         <input type="number" id="input-conciliacion-anio" value="${conciliacionAnio}" />
       </label>
       <label class="filtro-campo">Período
@@ -1089,30 +1336,48 @@ function pintarConciliacion(contenedor, sedes) {
           ${NOMBRES_GRADOS.map(([n, nombre]) => `<option value="${n}" ${String(n) === conciliacionGradoSeleccionado ? "selected" : ""}>${nombre}</option>`).join("")}
         </select>
       </label>
+      </div>
+      <div class="rep-acciones">
+        <button type="button" class="docs-icono" id="btn-actualizar-conciliacion" title="Actualizar (última vez: ${
+          conciliacionUltimaActualizacion ? formatoFechaHoraConciliacion(conciliacionUltimaActualizacion) : "-"
+        })" aria-label="Actualizar conciliación"><i data-lucide=refresh-cw class=ico></i></button>
+        <button type="button" class="boton secundario" id="btn-exportar-conciliacion"><i data-lucide=download class=ico></i> Excel de inconsistencias</button>
+        <button type="button" class="boton" id="btn-presencia-pdf"><i data-lucide=file-text class=ico></i> PDF de presencia</button>
+      </div>
     </div>
-
-    <div class="resumen-reportes">
-      <div class="metric-card"><span>SIMAC</span><strong>${r.resumen.total_simac}</strong></div>
-      <div class="metric-card"><span>SAPRED</span><strong>${r.resumen.total_sapred}</strong></div>
-      <div class="metric-card ok"><span>Coinciden</span><strong>${r.resumen.coinciden}</strong></div>
-      <div class="metric-card ${r.resumen.solo_simac ? "alerta" : "ok"}"><span><span class=punto-rojo></span>Solo SIMAC</span><strong>${r.resumen.solo_simac}</strong></div>
-      <div class="metric-card ${r.resumen.solo_sapred ? "alerta" : "ok"}"><span><span class=punto-naranja></span>Solo SAPRED</span><strong>${r.resumen.solo_sapred}</strong></div>
-      <div class="metric-card ${r.resumen.diferencias ? "proceso" : "ok"}"><span><span class=punto-amarillo></span>Con diferencias</span><strong>${r.resumen.diferencias}</strong></div>
-      <div class="metric-card ${r.resumen.candidatos_promocion_anticipada ? "alerta" : "ok"}" title="SAPRED ya lo tiene en un grado más alto que SIMAC: probablemente ya lo promovieron en la práctica y la matrícula no se actualizó"><span>Posible promoción anticipada</span><strong>${r.resumen.candidatos_promocion_anticipada}</strong></div>
-      <div class="metric-card ${r.resumen.grupos_con_inconsistencias ? "alerta" : "ok"}"><span>Grupos pendientes</span><strong>${r.resumen.grupos_con_inconsistencias}</strong></div>
-      <div class="metric-card ${r.resumen.docentes_pendientes ? "alerta" : "ok"}"><span>Docentes pendientes</span><strong>${r.resumen.docentes_pendientes}</strong></div>
+    <div class="rep-panel-fila">
+      <span class="rep-etq">PDF</span>
+      <div class="rep-chips">
+        <label class="rep-chip" title="Por defecto el PDF de presencia solo trae Solo SIMAT / Solo SAPRED"><input type="checkbox" id="check-presencia-incluir-coincide" ${presenciaIncluirCoincide ? "checked" : ""} /> Incluir también los que coinciden</label>
+      </div>
+      <span class="rep-detalle rep-derecha">Actualizado ${conciliacionUltimaActualizacion ? formatoFechaHoraConciliacion(conciliacionUltimaActualizacion) : "-"}</span>
     </div>
+    </section>
 
-    <div class="barra-progreso-wrap">
-      <div class="barra-progreso"><div class="barra-progreso-relleno" style="width:${r.resumen.calidad_pct}%; background:${colorCalidadConciliacion(r.resumen.calidad_pct)}"></div></div>
-      <span class="barra-progreso-texto">Calidad de conciliación: ${r.resumen.calidad_pct}% de los registros coinciden</span>
-    </div>
+    <section class="rep-hoja rep-conc-resumen">
+      <div class="rep-kpis">
+        <div><span>SIMAC</span><b>${r.resumen.total_simac}</b></div>
+        <div><span>SAPRED</span><b>${r.resumen.total_sapred}</b></div>
+        <div><span>Coinciden</span><b class="ok">${r.resumen.coinciden}</b></div>
+        <div><span>Calidad</span><b style="color:${colorCalidadConciliacion(r.resumen.calidad_pct)}">${r.resumen.calidad_pct}%</b></div>
+      </div>
+      <div class="docs-avance" role="progressbar" aria-valuenow="${r.resumen.calidad_pct}" aria-valuemin="0" aria-valuemax="100" aria-label="Calidad de conciliación"><span style="width:${r.resumen.calidad_pct}%; background:${colorCalidadConciliacion(r.resumen.calidad_pct)}"></span></div>
+      <p class="rep-detalle">${r.resumen.calidad_pct}% de los registros coinciden entre SIMAC y SAPRED.</p>
+      <ul class="rep-conteos">
+        <li class="${r.resumen.solo_simac ? "hay" : ""}"><span class=punto-rojo></span>Solo SIMAC <b>${r.resumen.solo_simac}</b></li>
+        <li class="${r.resumen.solo_sapred ? "hay" : ""}"><span class=punto-naranja></span>Solo SAPRED <b>${r.resumen.solo_sapred}</b></li>
+        <li class="${r.resumen.diferencias ? "hay" : ""}"><span class=punto-amarillo></span>Con diferencias <b>${r.resumen.diferencias}</b></li>
+        <li class="${r.resumen.candidatos_promocion_anticipada ? "hay" : ""}" title="SAPRED ya lo tiene en un grado más alto que SIMAC: probablemente ya lo promovieron en la práctica y la matrícula no se actualizó">Posible promoción anticipada <b>${r.resumen.candidatos_promocion_anticipada}</b></li>
+        <li class="${r.resumen.grupos_con_inconsistencias ? "hay" : ""}">Grupos pendientes <b>${r.resumen.grupos_con_inconsistencias}</b></li>
+        <li class="${r.resumen.docentes_pendientes ? "hay" : ""}">Docentes pendientes <b>${r.resumen.docentes_pendientes}</b></li>
+      </ul>
+    </section>
 
-    <nav class="subnav-modulo no-imprimir" style="margin-top:18px">
+    <nav class="subnav-modulo no-imprimir rep-subnav">
       <button type="button" class="subnav-item ${conciliacionVista === "estudiantes" ? "activo" : ""}" data-vista-conciliacion="estudiantes">Estudiantes</button>
       <button type="button" class="subnav-item ${conciliacionVista === "grupos" ? "activo" : ""}" data-vista-conciliacion="grupos">Grado y grupo</button>
       <button type="button" class="subnav-item ${conciliacionVista === "docentes" ? "activo" : ""}" data-vista-conciliacion="docentes">Por docente</button>
-      <button type="button" class="subnav-item ${conciliacionVista === "hallazgos" ? "activo" : ""}" data-vista-conciliacion="hallazgos"><i data-lucide=folder-open class=ico></i> Grilla — Promoción anticipada${r.resumen.candidatos_promocion_anticipada ? ` (${r.resumen.candidatos_promocion_anticipada})` : ""}</button>
+      <button type="button" class="subnav-item ${conciliacionVista === "hallazgos" ? "activo" : ""}" data-vista-conciliacion="hallazgos">Promoción anticipada${r.resumen.candidatos_promocion_anticipada ? ` (${r.resumen.candidatos_promocion_anticipada})` : ""}</button>
     </nav>
 
     <div id="detalle-conciliacion">
@@ -1138,10 +1403,10 @@ function pintarConciliacion(contenedor, sedes) {
 function filaEstudianteConciliacionHtml(e) {
   const acciones = [];
   if (e.estudiante_id) {
-    acciones.push(`<button type="button" class="boton secundario" data-ver-estudiante-conciliacion="${e.estudiante_id}">Ver estudiante</button>`);
+    acciones.push(`<button type="button" class="rep-accion" data-ver-estudiante-conciliacion="${e.estudiante_id}">Ver estudiante</button>`);
   }
   if (e.diferencias.length) {
-    acciones.push(`<button type="button" class="boton secundario" data-ver-diferencia-conciliacion="${e.estudiante_id}">Ver diferencia</button>`);
+    acciones.push(`<button type="button" class="rep-accion" data-ver-diferencia-conciliacion="${e.estudiante_id}">Ver diferencia</button>`);
   }
   return `<tr>
     <td>${e.nombre_completo}</td>
@@ -1160,11 +1425,11 @@ function filaEstudianteConciliacionHtml(e) {
 
 function htmlVistaEstudiantesConciliacion(estudiantes, docentesDisponibles) {
   return `
-    <div class="buscador-principal no-imprimir">
-      <span class="buscador-principal-icono" aria-hidden="true"><i data-lucide=search class=ico></i> </span>
-      <input type="text" id="buscar-conciliacion" placeholder="Buscar por nombre o documento..." value="${conciliacionBusqueda}" />
-    </div>
-    <div class="barra-filtros no-imprimir">
+    <div class="rep-barra no-imprimir">
+      <label class="rep-buscar">
+        <i data-lucide=search class=ico></i>
+        <input type="search" id="buscar-conciliacion" placeholder="Buscar por nombre o documento" aria-label="Buscar estudiante" value="${conciliacionBusqueda}" />
+      </label>
       <label class="filtro-campo">Estado
         <select id="select-conciliacion-estado">
           <option value="problemas" ${conciliacionEstadoFiltro === "problemas" ? "selected" : ""}>Solo con problemas (oculta los que coinciden)</option>
@@ -1183,10 +1448,10 @@ function htmlVistaEstudiantesConciliacion(estudiantes, docentesDisponibles) {
         </select>
       </label>
     </div>
-    <p class="conteo-resultados no-imprimir">${estudiantes.length} estudiante(s)</p>
+    <p class="rep-detalle no-imprimir">${estudiantes.length} estudiante(s)</p>
     ${
       estudiantes.length
-        ? `<div class="tabla-scroll"><table>
+        ? `<div class="tabla-scroll"><table class="rep-tabla">
              <thead><tr><th>Estudiante</th><th>Documento</th><th>Grado</th><th>Grupo</th><th>Director</th><th>Estado</th><th></th></tr></thead>
              <tbody>${estudiantes.map(filaEstudianteConciliacionHtml).join("")}</tbody>
            </table></div>`
@@ -1200,8 +1465,8 @@ function htmlVistaGruposConciliacion(grupos) {
     return `<div class="estado-vacio"><div class="estado-vacio-icono"><i data-lucide=check class=ico></i> </div><h3>Sin grupos para este filtro</h3><p>Prueba cambiando la sede, el grado o el período.</p></div>`;
   }
   return `
-    <p class="conteo-resultados no-imprimir">${grupos.length} grupo(s)</p>
-    <div class="tabla-scroll"><table>
+    <p class="rep-detalle no-imprimir">${grupos.length} grupo(s)</p>
+    <div class="tabla-scroll"><table class="rep-tabla">
       <thead><tr><th>Sede</th><th>Grupo</th><th>Director</th><th>SIMAC</th><th>SAPRED</th><th>Coinciden</th><th>Faltantes</th><th>Estado</th></tr></thead>
       <tbody>
         ${grupos
@@ -1456,8 +1721,8 @@ function filaHallazgoHtml(h) {
     <td class="no-imprimir celda-nowrap">
       ${
         h.resuelto
-          ? `<button type="button" class="boton secundario" data-reabrir-hallazgo="${h.id}"><i data-lucide=undo-2 class=ico></i> Reabrir</button>`
-          : `<button type="button" class="boton secundario" data-resolver-hallazgo="${h.id}"><i data-lucide=check class=ico></i> Marcar resuelto</button>`
+          ? `<button type="button" class="rep-accion" data-reabrir-hallazgo="${h.id}"><i data-lucide=undo-2 class=ico></i> Reabrir</button>`
+          : `<button type="button" class="rep-accion" data-resolver-hallazgo="${h.id}"><i data-lucide=check class=ico></i> Marcar resuelto</button>`
       }
     </td>
   </tr>`;
@@ -1465,8 +1730,8 @@ function filaHallazgoHtml(h) {
 
 function htmlGradoHallazgos(grado, filas) {
   return `
-    <p class="grupo" style="margin-top:16px">${nombreGradoLista(grado)} <span>(${filas.length})</span></p>
-    <div class="tabla-scroll"><table>
+    <p class="rep-grupo-titulo">${nombreGradoLista(grado)} <span>${filas.length}</span></p>
+    <div class="tabla-scroll"><table class="rep-tabla">
       <thead><tr>
         <th>Nombre</th><th>Documento</th><th>Sede</th>
         <th>SIMAC dice</th><th>SAPRED dice</th>
@@ -1488,16 +1753,16 @@ function pintarHallazgos(destino, contenedor, sedes, hallazgos) {
     : "Todas las sedes IETABA";
 
   destino.innerHTML = `
-    <div class="barra-filtros no-imprimir">
-      <label class="check-linea filtro-check">
-        <input type="checkbox" id="check-hallazgos-resueltos" ${hallazgosIncluirResueltos ? "checked" : ""} /> Incluir ya resueltos (historial completo)
-      </label>
-      <button type="button" class="boton" id="btn-hallazgos-pdf" ${hallazgos.length ? "" : "disabled"}><i data-lucide=file-text class=ico></i> Descargar PDF</button>
-      <button type="button" class="boton secundario" onclick="window.print()"><i data-lucide=printer class=ico></i> Imprimir</button>
+    <div class="rep-barra no-imprimir">
+      <label class="rep-chip"><input type="checkbox" id="check-hallazgos-resueltos" ${hallazgosIncluirResueltos ? "checked" : ""} /> Incluir ya resueltos</label>
+      <div class="rep-acciones">
+        <button type="button" class="boton secundario" onclick="window.print()"><i data-lucide=printer class=ico></i> Imprimir</button>
+        <button type="button" class="boton" id="btn-hallazgos-pdf" ${hallazgos.length ? "" : "disabled"}><i data-lucide=file-text class=ico></i> Descargar PDF</button>
+      </div>
     </div>
-    <div class="hoja-imprimir">
-      <h2 style="margin:6px 0">Casos de grado distinto entre SIMAC y SAPRED</h2>
-      <p class="pendiente">Esta grilla se guarda aunque se corrija el dato o se cambie de filtro: queda como historial, con cuándo se detectó cada caso y quién lo resolvió — para no perder de un año a otro a quién hay que promoverle el grado en la próxima matrícula.</p>
+    <div class="hoja-imprimir rep-hoja">
+      <h2 class="rep-hoja-titulo">Casos de grado distinto entre SIMAC y SAPRED</h2>
+      <p class="rep-hoja-sub">Esta grilla se guarda aunque se corrija el dato o se cambie de filtro: queda como historial, con cuándo se detectó cada caso y quién lo resolvió — para no perder de un año a otro a quién hay que promoverle el grado en la próxima matrícula.</p>
       ${
         !hallazgos.length
           ? `<div class="estado-vacio"><div class="estado-vacio-icono"><i data-lucide=check class=ico></i> </div><h3>No hay casos ${hallazgosIncluirResueltos ? "" : "pendientes "}para este filtro</h3></div>`

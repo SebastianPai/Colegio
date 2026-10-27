@@ -32,6 +32,7 @@ const {
   abrirPestanaBoletinGeneral,
   configurarOpcionesImpresionBoletin,
   generarBoletinPdfSede,
+  leerPeriodosYGrados,
 } = require("./sapred_core.js");
 const SEDES_SAPRED = require("./config_sedes.json");
 
@@ -44,13 +45,6 @@ function slugSede(nombre) {
     .trim()
     .slice(0, 120) || "sede";
 }
-
-const PERIODOS_TEXTO = {
-  "1": "PRIMER PERIODO",
-  "2": "SEGUNDO PERIODO",
-  "3": "TERCER PERIODO",
-  "4": "CUARTO PERIODO",
-};
 
 function leerArgs() {
   const args = {};
@@ -73,9 +67,18 @@ async function reportarProgreso(apiBase, auditId, datos) {
   const args = leerArgs();
   const auditId = args["audit-id"];
   const apiBase = args["api-base"] || "http://127.0.0.1:8000";
-  const periodoNum = ["1", "2", "3", "4"].includes(args.periodo) ? args.periodo : "2";
-  const periodoTexto = PERIODOS_TEXTO[periodoNum];
-  const gradoFiltro = args.grado ? Number(args.grado) : null;
+  // Un solo periodo (los PDF van a una carpeta por periodo) y uno, varios o
+  // todos los grados.
+  let periodoTexto, gradosAProcesar;
+  try {
+    const leido = leerPeriodosYGrados(args);
+    if (leido.periodos.length !== 1) throw new Error("Los boletines en PDF se generan de a un periodo.");
+    periodoTexto = leido.periodos[0].texto;
+    gradosAProcesar = leido.grados;
+  } catch (e) {
+    console.error(e.message);
+    process.exit(1);
+  }
   const sedeIdsFiltro = args.sedes ? args.sedes.split(",").map(Number) : null;
   const carpeta = args.carpeta;
 
@@ -94,8 +97,6 @@ async function reportarProgreso(apiBase, auditId, datos) {
       sedeIdPorNombre[s.nombre] = s.id;
     });
 
-    const gradosAProcesar =
-      gradoFiltro !== null ? GRADOS.filter((g) => g.numero === gradoFiltro) : GRADOS;
 
     // Plan agrupado POR SEDE: { sedeId, sedeNombreDB, sedeSapred, grados: [{grado, n}] }
     const porSede = new Map();

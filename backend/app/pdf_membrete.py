@@ -28,7 +28,7 @@ AZUL = "#1f3a5f"
 PIE_LEMA = "Por la pervivencia e identidad del Pueblo Awá"
 PIE_LINEAS = [
     "Unidad administrativa – Predio el Verde, resguardo el Gran Sábalo – El Diviso - Barbacoas Nariño",
-    "E-mail: ietabaawa@yahoo.es",
+    "E-mail: awa@ietaba.edu.co",
 ]
 
 CSS_BASE = """
@@ -112,8 +112,11 @@ class Papeleria:
         )
 
     def cabe(self, contenido: str, area: fitz.Rect) -> bool:
-        sobra, _ = fitz.Story(html=contenido, user_css=self.css, archive=self.archivo).place(area)
-        return not sobra
+        sobra, lleno = fitz.Story(html=contenido, user_css=self.css, archive=self.archivo).place(area)
+        # Con algunas tablas place() dice que no sobra nada aunque lo colocado
+        # se pase del borde de abajo (y eso al dibujar se pierde): también se
+        # mira hasta dónde llegó.
+        return not sobra and lleno[3] <= area.y1 + 0.5
 
 
 def medidas(horizontal: bool) -> tuple[fitz.Rect, fitz.Rect, fitz.Rect, fitz.Rect, int]:

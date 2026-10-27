@@ -135,6 +135,14 @@ def asegurar_columnas_sqlite() -> None:
         if "resguardo" not in columnas:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE estudiantes ADD COLUMN resguardo BOOLEAN DEFAULT 1 NOT NULL"))
+        for columna, tipo in (
+            ("pendiente_simat", "BOOLEAN DEFAULT 0 NOT NULL"),
+            ("creado_por_id", "INTEGER REFERENCES usuarios(id)"),
+            ("creado_en", "DATETIME"),
+        ):
+            if columna not in columnas:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE estudiantes ADD COLUMN {columna} {tipo}"))
 
     if "fotos_estudiante" in tablas:
         columnas_info = {c["name"]: c for c in inspector.get_columns("fotos_estudiante")}
@@ -152,6 +160,13 @@ def asegurar_columnas_sqlite() -> None:
                 "fotos_estudiante",
                 ["id", "estudiante_id", "etiqueta", "anio_lectivo", "nombre_archivo", "orden", "subido_en"],
             )
+        columnas_fotos = {c["name"] for c in inspect(engine).get_columns("fotos_estudiante")}
+        if "uuid_cliente" not in columnas_fotos:
+            # Subidas desde el celular sin conexión (cola en el navegador): si
+            # la respuesta se pierde y el celular reintenta, el mismo
+            # uuid_cliente evita guardar el documento dos veces.
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE fotos_estudiante ADD COLUMN uuid_cliente VARCHAR(36)"))
 
     if "revisiones_boletin" in tablas:
         columnas = {c["name"] for c in inspector.get_columns("revisiones_boletin")}
@@ -187,6 +202,10 @@ def asegurar_columnas_sqlite() -> None:
         if "carpeta_salida" not in columnas:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE auditorias_sapred ADD COLUMN carpeta_salida VARCHAR(300)"))
+        for columna, tipo in (("periodos", "VARCHAR(50)"), ("grados", "VARCHAR(100)")):
+            if columna not in columnas:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE auditorias_sapred ADD COLUMN {columna} {tipo}"))
 
     if "asignaciones_docente" in tablas:
         columnas = {c["name"] for c in inspector.get_columns("asignaciones_docente")}
@@ -574,6 +593,27 @@ def otorgar_permisos_nuevos(permisos_nuevos: list[str]) -> list[str]:
     return otorgados
 
 
+def administrador_con_todos_los_permisos() -> list[str]:
+    """Decisión del colegio (19/10/2026): el rol Administrador ve TODO, sin
+    excepciones (incluidas las observaciones confidenciales). Corre en cada
+    arranque: si el catálogo trae un permiso que el Administrador no tiene,
+    se le da. rbac_admin.establecer_permisos_rol impide quitárselos."""
+    otorgados: list[str] = []
+    with Session(engine) as db:
+        rol = db.scalar(select(models.Rol).where(models.Rol.codigo == permisos_catalogo.ROL_TODOS_LOS_PERMISOS))
+        if rol is None:
+            return []
+        ya = set(db.scalars(select(models.RolPermiso.permiso_id).where(models.RolPermiso.rol_id == rol.id)))
+        for permiso in db.scalars(select(models.Permiso)).all():
+            if permiso.id not in ya:
+                db.add(models.RolPermiso(rol_id=rol.id, permiso_id=permiso.id))
+                otorgados.append(permiso.codigo)
+        db.commit()
+    if otorgados:
+        _log(f"permisos otorgados al Administrador (ve todo): {', '.join(otorgados)}")
+    return otorgados
+
+
 # --- Punto de entrada ---------------------------------------------------------------
 
 
@@ -598,6 +638,7 @@ def ejecutar() -> dict[str, list[str]]:
     permisos_nuevos = sincronizar_catalogo_permisos()
     roles_nuevos = sembrar_roles_sistema()
     otorgar_permisos_nuevos(permisos_nuevos)
+    administrador_con_todos_los_permisos()
     sembrar_areas_secundaria()
     sembrar_areas_primaria_confirmadas()
     backfill_pendientes_legacy()

@@ -277,10 +277,10 @@ def generar_pdf(
         encabezado, filas = bloque[0], bloque[1:]
         if not filas:
             continue
-        # UN DÍA POR HOJA: si el día no cabe completo en lo que queda de la
-        # hoja, se pasa entero a la siguiente (la portada puede quedar sola).
-        # Solo se parte si ni en una hoja vacía cabe — ahí sí va "(continuación)".
-        if actual and not papeleria.cabe(actual + cabecera + tabla(encabezado, filas, ""), area):
+        # CADA DÍA EMPIEZA EN HOJA NUEVA: la portada queda sola en la primera y
+        # ningún día sigue debajo de otro. Solo se parte si el día no cabe en
+        # una hoja vacía — ahí sí va "(continuación)".
+        if actual:
             paginas.append(actual)
             actual = ""
         i = 0

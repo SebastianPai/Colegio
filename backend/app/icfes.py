@@ -261,6 +261,125 @@ def estudiantes_anio(db: Session, anio: int) -> dict:
     return {"resumen": resumen, "estudiantes": lista}
 
 
+# Para el reporte por curso: un estudiante de 11 sin vínculo exacto se empareja
+# con un resultado SIN vincular del año lectivo actual cuyo nombre se parece
+# mucho (YENNI/YENNY, CATHERINE/KATERINE...). Solo si es claro en los dos
+# sentidos: el mejor candidato le gana con margen a los demás resultados, y
+# ningún otro estudiante de 11 se parece tanto a ese resultado (dos homónimos
+# no se resuelven adivinando). Sale marcado como aproximado y con el nombre tal
+# como lo escribió el ICFES.
+SIMILITUD_MINIMA = 0.88
+SIMILITUD_MARGEN = 0.05
+
+
+def _similitud(a: str, b: str) -> float:
+    from difflib import SequenceMatcher
+
+    return SequenceMatcher(None, a, b).ratio()
+
+
+def _coincidencia_aproximada(nombre: str, candidatos: dict[int, str], otros_de_11: list[str]) -> int | None:
+    n = _nombre_normalizado(nombre)
+    puntajes = sorted(((_similitud(n, c), rid) for rid, c in candidatos.items()), reverse=True)
+    if not puntajes or puntajes[0][0] < SIMILITUD_MINIMA:
+        return None
+    if len(puntajes) > 1 and puntajes[0][0] - puntajes[1][0] < SIMILITUD_MARGEN:
+        return None
+    mejor = puntajes[0]
+    if any(_similitud(o, candidatos[mejor[1]]) > mejor[0] - SIMILITUD_MARGEN for o in otros_de_11):
+        return None
+    return mejor[1]
+
+
+def _fila_resultado(r: models.ResultadoIcfes) -> dict:
+    return {
+        "id": r.id, "registro": r.registro, "anio": r.anio, "periodo": r.periodo, "nombre_icfes": r.nombre,
+        "puntaje_global": r.puntaje_global, "percentil_global": r.percentil_global,
+        "pruebas": {p: {"puntaje": getattr(r, p), "percentil": getattr(r, "pct_" + p),
+                        "nivel": nivel(p, getattr(r, p))} for p in PRUEBAS},
+    }
+
+
+def resultados_por_grupo(db: Session, sede_id: int, grado: int, curso: int | None = None) -> dict:
+    """Estudiantes ACTIVOS de un grupo actual (sede + grado + división, ej. 11-2)
+    con su resultado ICFES más reciente, para imprimir un reporte del curso. El
+    vínculo estudiante↔ICFES es por nombre (ver vincular_estudiantes); si no hay
+    vínculo exacto se intenta una coincidencia aproximada (marcada como tal).
+    Quien no tenga resultado sale igual en la lista, marcado «sin resultado»."""
+    from . import crud, fechas
+
+    def completo(e: models.Estudiante) -> str:
+        return " ".join(x for x in (e.primer_nombre, e.segundo_nombre, e.primer_apellido, e.segundo_apellido) if x)
+
+    estudiantes = crud.listar_estudiantes(db, sede_id=sede_id, grado=grado, curso=curso, estado="ACTIVO")
+    todos = _resultados(db)
+    por_est: dict[int, list[models.ResultadoIcfes]] = defaultdict(list)
+    for r in todos:
+        if r.estudiante_id is not None:
+            por_est[r.estudiante_id].append(r)
+    anio_actual = fechas.anio_lectivo_actual()
+    sin_vincular = {r.id: r for r in todos if r.estudiante_id is None and r.anio == anio_actual}
+    candidatos = {rid: _nombre_normalizado(r.nombre) for rid, r in sin_vincular.items()} if grado == 11 else {}
+    de_11 = {e.id: _nombre_normalizado(completo(e))
+             for e in (crud.listar_estudiantes(db, grado=11, estado="ACTIVO") if candidatos else [])}
+
+    con_resultado, sin_resultado = [], []
+    for e in estudiantes:
+        nombre = completo(e)
+        res = por_est.get(e.id, [])
+        mejor = max(res, key=lambda r: (r.anio, r.periodo)) if res else None
+        aproximada = False
+        if mejor is None and candidatos:
+            rid = _coincidencia_aproximada(nombre, candidatos, [n for i, n in de_11.items() if i != e.id])
+            if rid is not None:
+                mejor, aproximada = sin_vincular[rid], True
+                candidatos.pop(rid)  # un resultado no se le asigna a dos estudiantes
+        fila = {"estudiante_id": e.id, "nombre": nombre, "documento": e.documento, "resultado": None,
+                "aproximada": aproximada}
+        if mejor is not None:
+            fila["resultado"] = _fila_resultado(mejor)
+            con_resultado.append(fila)
+        else:
+            sin_resultado.append(fila)
+
+    con_resultado.sort(key=lambda f: -(f["resultado"]["puntaje_global"] if f["resultado"]["puntaje_global"] is not None else -1))
+    sin_resultado.sort(key=lambda f: f["nombre"])
+    for puesto, f in enumerate(con_resultado, 1):
+        f["puesto"] = puesto if f["resultado"]["puntaje_global"] is not None else None
+
+    # Promedios del grupo y, para comparar, del colegio en el año más reciente del grupo
+    resultados = [f["resultado"] for f in con_resultado]
+    anios = sorted({r["anio"] for r in resultados})
+    colegio = _resumen_anio(anios[-1], [r for r in todos if r.anio == anios[-1]]) if anios else None
+    resumen_pruebas = {}
+    for p in PRUEBAS:
+        punt = [r["pruebas"][p]["puntaje"] for r in resultados if r["pruebas"][p]["puntaje"] is not None]
+        pct = [r["pruebas"][p]["percentil"] for r in resultados if r["pruebas"][p]["percentil"] is not None]
+        bajo = sum(1 for r in resultados if r["pruebas"][p]["nivel"] == NIVEL_MAS_BAJO[p])
+        resumen_pruebas[p] = {
+            "promedio": _media(punt), "percentil": _media(pct),
+            "pct_nivel_bajo": round(100 * bajo / len(punt)) if punt else None,
+            "colegio": colegio["pruebas"][p]["promedio"] if colegio else None,
+        }
+    globales = [r["puntaje_global"] for r in resultados if r["puntaje_global"] is not None]
+    sede = db.get(models.Sede, sede_id)
+    return {
+        "sede_id": sede_id, "sede_nombre": sede.nombre if sede else "", "grado": grado, "curso": curso,
+        "nombre_grupo": models.GRADOS_NOMBRES.get(grado, str(grado))
+        + (f" - {models.DIVISIONES_NOMBRES.get(curso, str(curso))}" if curso else ""),
+        "total": len(estudiantes), "con_resultado": len(con_resultado), "sin_resultado": len(sin_resultado),
+        "aproximadas": sum(f["aproximada"] for f in con_resultado),
+        "anios": anios, "promedio_global": _media(globales),
+        "global_max": max(globales) if globales else None, "global_min": min(globales) if globales else None,
+        "colegio_anio": anios[-1] if anios else None, "colegio_global": colegio["global"] if colegio else None,
+        "colegio_n": colegio["n"] if colegio else None,
+        "resumen_pruebas": resumen_pruebas,
+        "pruebas": [{"codigo": p, "nombre": NOMBRE_PRUEBA[p], "niveles": [n for *_, n in NIVELES[p]],
+                     "nivel_bajo": NIVEL_MAS_BAJO[p]} for p in PRUEBAS],
+        "estudiantes": con_resultado + sin_resultado,
+    }
+
+
 def ficha(db: Session, resultado_id: int) -> dict | None:
     r = db.get(models.ResultadoIcfes, resultado_id)
     if r is None:

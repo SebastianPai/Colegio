@@ -193,7 +193,11 @@ function _aplicarVisibilidadPorPermisos(permisos) {
   const lista = permisos || [];
   document.querySelectorAll("[data-permiso]").forEach((el) => {
     const moduloApagado = el.dataset.vista === "orientacion" && modulosSistema.orientacion === false;
-    el.hidden = !lista.includes(el.dataset.permiso) || moduloApagado;
+    // Docencia trabaja sobre las asignaciones del docente enlazado: sin
+    // enlace (p. ej. el Administrador, que tiene todos los permisos) solo
+    // daría "Tu usuario no está vinculado a un docente".
+    const sinDocente = "requiereDocente" in el.dataset && !sesionActual?.usuario?.docente_id;
+    el.hidden = !lista.includes(el.dataset.permiso) || moduloApagado || sinDocente;
   });
   // Un grupo del menú (ej. "Gestión") sin NINGÚN botón visible (ni siquiera
   // un "Próximamente") se oculta completo, para no dejar un título suelto
@@ -222,6 +226,9 @@ async function _continuarConSesion(sesion) {
   _aplicarVisibilidadPorPermisos(sesion.usuario.permisos);
   _mostrarApp();
   _arrancarKeepAlive(); // Fase 4A': que la cookie de acceso no venza en uso
+  // Uso sin conexión (sin_conexion.js): borra lo guardado si entró otra
+  // persona en este celular y sube lo que haya quedado en cola.
+  if (typeof sinConexionAlIniciarSesion === "function") sinConexionAlIniciarSesion(sesion.usuario);
   // main.js define iniciarNavegacion(): aplica los parámetros de la URL y
   // llama a render() — exactamente la misma lógica que ya existía, solo que
   // ahora se ejecuta después de confirmar la sesión en vez de al cargar el
@@ -339,6 +346,10 @@ async function _manejarSubmitCambiarClave(evento) {
 }
 
 async function _manejarLogout() {
+  // Avisa si hay documentos sin subir y borra del celular lo guardado para
+  // usar sin wifi (fichas y fotos de estudiantes): no debe quedar para la
+  // próxima persona que use este equipo.
+  if (typeof sinConexionAntesDeCerrarSesion === "function" && !(await sinConexionAntesDeCerrarSesion())) return;
   try {
     await _fetchCrudo("/api/auth/logout", { method: "POST" });
   } catch {

@@ -680,6 +680,8 @@ function controlesPaginacion(resultado) {
 }
 
 function verificacionBadgeHtml(e) {
+  if (e.pendiente_simat)
+    return `<span class="badge-verif alerta" title="Matriculado aquí${e.creado_por_nombre ? ` por ${esc(e.creado_por_nombre)}` : ""}; falta registrarlo en SIMAT">Nuevo · pendiente SIMAT</span>`;
   if (e.verificado_matricula === true) return '<span class="badge-verif ok"><i data-lucide=check class=ico></i> Verificado</span>';
   if (e.verificado_matricula === false)
     return '<span class="badge-verif alerta" title="No aparece en la base de datos oficial de matrícula importada">Pendiente</span>';
@@ -780,6 +782,7 @@ async function renderZonaImpresion(sedes, gradosDeSede) {
         ${MESES.map((m, i) => `<option value="${i}" ${i === mesSeleccionado ? "selected" : ""}>${m}</option>`).join("")}
       </select>
       <button class="boton" id="btn-imprimir">Imprimir</button>
+      ${tienePermiso("reportes.ver") ? '<button type="button" class="boton secundario" id="btn-imprimir-varios">Imprimir varios grupos a la vez</button>' : ""}
     </div>
     ${
       estudiantes.length
@@ -799,6 +802,15 @@ async function renderZonaImpresion(sedes, gradosDeSede) {
   });
 
   document.getElementById("btn-imprimir")?.addEventListener("click", () => window.print());
+  // Reportes → Listas de asistencia: varios grupos en un solo PDF oficio.
+  document.getElementById("btn-imprimir-varios")?.addEventListener("click", () => {
+    seccionReportes = "asistencia";
+    asistListaSede = String(sedeSeleccionada);
+    const grupo = divisionSeleccionada !== null ? `${gradoSeleccionado}-${divisionSeleccionada}` : String(gradoSeleccionado);
+    asistListaGrupos = grupo;
+    asistListaMes = mesSeleccionado + 1;
+    document.querySelector('[data-vista="reportes"]')?.click();
+  });
 }
 
 // --- Hoja imprimible (formato oficial del Excel) -----------------------------

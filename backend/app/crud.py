@@ -60,6 +60,20 @@ def actualizar_sede(db: Session, sede_id: int, cambios: schemas.SedeUpdate) -> m
     return sede
 
 
+# Niveles de la Ley 115 (los mismos de certificados.NIVELES_POR_GRADO):
+# (clave, nombre, texto de grados, grados que incluye).
+NIVELES_EDUCATIVOS = [
+    ("preescolar", "Preescolar", "Transición", range(0, 1)),
+    ("primaria", "Básica primaria", "1° a 5°", range(1, 6)),
+    ("secundaria", "Básica secundaria", "6° a 9°", range(6, 10)),
+    ("media", "Media", "10° y 11°", range(10, 12)),
+]
+
+
+def _clave_nivel(grado: int) -> str | None:
+    return next((clave for clave, _n, _g, grados in NIVELES_EDUCATIVOS if grado in grados), None)
+
+
 def generar_reporte(db: Session, solo_ietaba: bool = True) -> schemas.ReporteGeneral:
     stmt = select(models.Sede).order_by(models.Sede.nombre)
     if solo_ietaba:
@@ -68,10 +82,19 @@ def generar_reporte(db: Session, solo_ietaba: bool = True) -> schemas.ReporteGen
 
     por_sede = []
     total_h = total_m = total = 0
+    niveles = {clave: {"total": 0, "h": 0, "m": 0} for clave, *_ in NIVELES_EDUCATIVOS}
     for s in sedes:
         activos = [e for e in s.estudiantes if e.activo]
         hombres = sum(1 for e in activos if (e.genero or "").upper() == "M")
         mujeres = sum(1 for e in activos if (e.genero or "").upper() == "F")
+        for e in activos:
+            clave = _clave_nivel(e.grado)
+            if clave is None:
+                continue
+            niveles[clave]["total"] += 1
+            genero = (e.genero or "").upper()
+            niveles[clave]["h"] += genero == "M"
+            niveles[clave]["m"] += genero == "F"
         por_sede.append(
             schemas.ReporteSede(
                 id=s.id, nombre=s.nombre, total_estudiantes=len(activos), hombres=hombres, mujeres=mujeres
@@ -81,8 +104,17 @@ def generar_reporte(db: Session, solo_ietaba: bool = True) -> schemas.ReporteGen
         total_h += hombres
         total_m += mujeres
 
+    por_nivel = [
+        schemas.ReporteNivel(
+            clave=clave, nombre=nombre, grados=texto_grados, total_estudiantes=niveles[clave]["total"],
+            hombres=niveles[clave]["h"], mujeres=niveles[clave]["m"],
+        )
+        for clave, nombre, texto_grados, _grados in NIVELES_EDUCATIVOS
+    ]
+
     return schemas.ReporteGeneral(
-        total_sedes=len(sedes), total_estudiantes=total, hombres=total_h, mujeres=total_m, por_sede=por_sede
+        total_sedes=len(sedes), total_estudiantes=total, hombres=total_h, mujeres=total_m, por_sede=por_sede,
+        por_nivel=por_nivel,
     )
 
 
@@ -290,7 +322,12 @@ def eliminar_estudiante(db: Session, estudiante_id: int) -> bool:
 
 
 def agregar_foto(
-    db: Session, estudiante_id: int, etiqueta: str, anio_lectivo: int | None, nombre_archivo: str
+    db: Session,
+    estudiante_id: int,
+    etiqueta: str,
+    anio_lectivo: int | None,
+    nombre_archivo: str,
+    uuid_cliente: str | None = None,
 ) -> models.FotoEstudiante:
     orden_actual = db.scalar(
         select(func.count()).where(models.FotoEstudiante.estudiante_id == estudiante_id)
@@ -301,6 +338,7 @@ def agregar_foto(
         anio_lectivo=anio_lectivo,
         nombre_archivo=nombre_archivo,
         orden=orden_actual,
+        uuid_cliente=uuid_cliente,
     )
     db.add(foto)
     db.commit()
@@ -310,6 +348,34 @@ def agregar_foto(
 
 def obtener_foto(db: Session, foto_id: int) -> models.FotoEstudiante | None:
     return db.get(models.FotoEstudiante, foto_id)
+
+
+def resumen_descarga_sin_conexion(db: Session, estudiantes) -> dict:
+    """Cuánto pesa descargar al celular (botón «Usar sin wifi») estas fichas
+    con sus documentos. Lo usa la pantalla para avisar ANTES de descargar.
+    Las fichas se calculan en el frontend (unos KB por estudiante); aquí va
+    lo que de verdad pesa: los archivos de los documentos."""
+    ids = [e.id for e in estudiantes]
+    fotos = []
+    for i in range(0, len(ids), 500):  # límite de parámetros de SQLite
+        fotos += db.scalars(
+            select(models.FotoEstudiante).where(models.FotoEstudiante.estudiante_id.in_(ids[i : i + 500]))
+        ).all()
+    return {
+        "estudiantes": len(ids),
+        "documentos": len(fotos),
+        "pdfs": sum(1 for f in fotos if f.es_pdf),
+        "bytes_documentos": sum(f.tamano_bytes or 0 for f in fotos),
+    }
+
+
+def foto_por_uuid_cliente(db: Session, estudiante_id: int, uuid_cliente: str) -> models.FotoEstudiante | None:
+    return db.scalar(
+        select(models.FotoEstudiante).where(
+            models.FotoEstudiante.estudiante_id == estudiante_id,
+            models.FotoEstudiante.uuid_cliente == uuid_cliente,
+        )
+    )
 
 
 def eliminar_foto(db: Session, foto_id: int) -> models.FotoEstudiante | None:
@@ -342,8 +408,11 @@ def listar_constancias(
     desde: dt.date | None = None,
     hasta: dt.date | None = None,
     proposito: str | None = None,
+    estudiante_id: int | None = None,
 ) -> list[models.ConstanciaGenerada]:
     stmt = select(models.ConstanciaGenerada).join(models.Estudiante)
+    if estudiante_id is not None:
+        stmt = stmt.where(models.ConstanciaGenerada.estudiante_id == estudiante_id)
     if busqueda:
         patron = f"%{busqueda.lower()}%"
         nombre_completo = func.lower(
@@ -378,6 +447,72 @@ def listar_docentes(db: Session) -> list[models.Docente]:
 def _grupo_label(grado: int, curso: int | None) -> str:
     grado_txt = models.GRADOS_NOMBRES.get(grado, str(grado))
     return f"{grado_txt} - {curso}" if curso else grado_txt
+
+
+def docentes_por_grados(
+    db: Session, anio_lectivo: int, grados: list[int], sede_id: int | None = None
+) -> list[dict]:
+    """Quién dicta en los grados pedidos (ej. 10 y 11), con cada materia y sus
+    grupos (Reportes → Lista de docentes → Por grado). Junta dos fuentes,
+    porque ninguna está completa sola: las asignaciones del año (lo que usan
+    el panel docente y los reportes) y el horario vigente (bloques activos).
+    Un grupo que solo aparece en el horario se marca solo_horario=True, para
+    que se vea que falta registrar esa asignación."""
+    asignaciones = db.scalars(
+        select(models.AsignacionDocente).where(
+            models.AsignacionDocente.anio_lectivo == anio_lectivo,
+            models.AsignacionDocente.grado.in_(grados),
+            *([models.AsignacionDocente.sede_id == sede_id] if sede_id else []),
+        ).options(selectinload(models.AsignacionDocente.docente), selectinload(models.AsignacionDocente.area))
+    ).all()
+    bloques = db.scalars(
+        select(models.BloqueHorario).where(
+            models.BloqueHorario.anio_lectivo == anio_lectivo,
+            models.BloqueHorario.estado == "activo",
+            models.BloqueHorario.grado.in_(grados),
+            *([models.BloqueHorario.sede_id == sede_id] if sede_id else []),
+        ).options(selectinload(models.BloqueHorario.docente), selectinload(models.BloqueHorario.area))
+    ).all()
+
+    por_docente: dict[int, dict] = {}
+
+    def entrada(docente: models.Docente) -> dict:
+        return por_docente.setdefault(docente.id, {
+            "id": docente.id, "nombre_completo": docente.nombre_completo, "documento": docente.documento,
+            "materias": {}, "director_de": set(),
+        })
+
+    for a in asignaciones:
+        grupo = (a.grado, a.curso)
+        d = entrada(a.docente)
+        if a.area_id is None:
+            d["director_de"].add(grupo)
+        else:
+            d["materias"].setdefault(a.area.nombre, {}).setdefault(grupo, set()).add("asignacion")
+    for b in bloques:
+        if b.area_id is None or b.area is None:
+            continue
+        entrada(b.docente)["materias"].setdefault(b.area.nombre, {}).setdefault((b.grado, b.curso), set()).add("horario")
+
+    etiqueta = lambda g: f"{g[0]}-{g[1]}" if g[1] is not None else str(g[0])  # noqa: E731
+    orden = lambda g: (g[0], g[1] or 0)  # noqa: E731
+    resultado = []
+    for d in por_docente.values():
+        resultado.append({
+            "id": d["id"], "nombre_completo": d["nombre_completo"], "documento": d["documento"],
+            "materias": [
+                {
+                    "area": area,
+                    "grupos": [
+                        {"grupo": etiqueta(g), "solo_horario": fuentes == {"horario"}}
+                        for g, fuentes in sorted(grupos.items(), key=lambda x: orden(x[0]))
+                    ],
+                }
+                for area, grupos in sorted(d["materias"].items())
+            ],
+            "director_de": [etiqueta(g) for g in sorted(d["director_de"], key=orden)],
+        })
+    return sorted(resultado, key=lambda d: d["nombre_completo"])
 
 
 def listar_docentes_reporte(
@@ -2773,6 +2908,89 @@ def _upsert_texto_boletin(
     cache[clave] = nuevo
 
 
+def _registrar_docentes_del_periodo(
+    db: Session, sede_id: int, grado: int, curso: int | None, anio_lectivo: int, periodo: int,
+    bloque: dict, areas_por_codigo: dict,
+) -> None:
+    """Guarda en DocenteAreaPeriodo el profesor de cada materia (y el director
+    de grupo, area_id=None) que trae el boletín de ESTE periodo. A diferencia
+    de AsignacionDocente (una por año, la primera manda), aquí el boletín
+    nuevo del mismo periodo reemplaza al anterior, y cada periodo queda por
+    separado: así se ve cuándo cambió el profesor."""
+    filtro_curso = models.DocenteAreaPeriodo.curso.is_(None) if curso is None else models.DocenteAreaPeriodo.curso == curso
+    existentes = {
+        f.area_id: f
+        for f in db.scalars(
+            select(models.DocenteAreaPeriodo).where(
+                models.DocenteAreaPeriodo.anio_lectivo == anio_lectivo,
+                models.DocenteAreaPeriodo.periodo == periodo,
+                models.DocenteAreaPeriodo.sede_id == sede_id,
+                models.DocenteAreaPeriodo.grado == grado,
+                filtro_curso,
+            )
+        ).all()
+    }
+    entradas = [(areas_por_codigo[a["codigo"]].id, a["docente"]) for a in bloque["areas"] if a.get("docente")]
+    if bloque.get("director_grupo"):
+        entradas.append((None, bloque["director_grupo"]))
+    ahora = dt.datetime.utcnow()
+    for area_id, nombre in entradas:
+        docente = _matchear_docente_por_tokens(db, nombre)
+        if docente is None and area_id is None:
+            docente = _matchear_docente_por_nombre(db, nombre)
+        fila = existentes.get(area_id)
+        if fila is None:
+            fila = models.DocenteAreaPeriodo(
+                anio_lectivo=anio_lectivo, periodo=periodo, sede_id=sede_id, grado=grado, curso=curso, area_id=area_id,
+            )
+            db.add(fila)
+            existentes[area_id] = fila
+        fila.nombre_sapred = nombre[:200]
+        fila.docente_id = docente.id if docente else None
+        fila.actualizado_en = ahora
+
+
+def docentes_por_periodo(db: Session, anio_lectivo: int, sede_id: int | None = None) -> list[schemas.DocenteMateriaPeriodos]:
+    """Una fila por grupo + materia, con el profesor de cada periodo según
+    los boletines importados, y el que está asignado para el año (el que usan
+    el panel docente y los reportes) para compararlo."""
+    consulta = select(models.DocenteAreaPeriodo).where(models.DocenteAreaPeriodo.anio_lectivo == anio_lectivo)
+    if sede_id is not None:
+        consulta = consulta.where(models.DocenteAreaPeriodo.sede_id == sede_id)
+    filas = db.scalars(consulta).all()
+    asignadas = {
+        (a.sede_id, a.grado, a.curso, a.area_id): a.docente
+        for a in db.scalars(
+            select(models.AsignacionDocente).where(models.AsignacionDocente.anio_lectivo == anio_lectivo)
+        ).all()
+    }
+    grupos: dict[tuple, schemas.DocenteMateriaPeriodos] = {}
+    for f in filas:
+        clave = (f.sede_id, f.grado, f.curso, f.area_id)
+        g = grupos.get(clave)
+        if g is None:
+            asignado = asignadas.get(clave)
+            g = grupos[clave] = schemas.DocenteMateriaPeriodos(
+                sede_id=f.sede_id, sede_nombre=f.sede.nombre, grado=f.grado, curso=f.curso,
+                area_id=f.area_id,
+                area_codigo=f.area.codigo if f.area else None,
+                area_nombre=f.area.nombre if f.area else "Director de grupo",
+                asignado_anio=asignado.nombre_completo if asignado else None,
+            )
+        g.periodos[f.periodo] = schemas.DocentePeriodo(
+            docente_id=f.docente_id,
+            docente_nombre=f.docente.nombre_completo if f.docente else None,
+            nombre_sapred=f.nombre_sapred,
+        )
+    resultado = []
+    for g in grupos.values():
+        quienes = [p.docente_id or p.nombre_sapred for _, p in sorted(g.periodos.items())]
+        g.cambia = len(set(quienes)) > 1
+        g.sin_docente = any(p.docente_id is None for p in g.periodos.values())
+        resultado.append(g)
+    return sorted(resultado, key=lambda g: (g.sede_nombre, g.grado, g.curso or 0, g.area_id is not None, g.area_nombre))
+
+
 def importar_bloque_boletin(db: Session, bloque: dict) -> schemas.ImportarBoletinResultadoBloque:
     """Aplica UN bloque (un curso) del reporte "Boletín informativo": reconoce
     la sede, completa el catálogo de áreas, asigna el profesor de cada materia
@@ -2874,6 +3092,9 @@ def importar_bloque_boletin(db: Session, bloque: dict) -> schemas.ImportarBoleti
                 )
             )
             docente_grupo_asignado = docente.nombre_completo
+
+    # --- Quién dicta cada materia EN ESTE PERIODO (puede cambiar) --------
+    _registrar_docentes_del_periodo(db, sede.id, grado, curso, anio_lectivo, periodo, bloque, areas_por_codigo)
 
     # --- Conceptos y observaciones -------------------------------------
     documentos_bloque = {e["documento"] for e in bloque["estudiantes"]}

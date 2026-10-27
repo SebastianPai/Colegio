@@ -81,6 +81,72 @@ def conteo_estudiantes_por_sede(
     return crud.conteo_estudiantes_por_sede(db, grado=grado, estado=estado)
 
 
+@router.get("/tamano-descarga")
+def tamano_descarga_sin_conexion(
+    _obs=Depends(rbac.observar("estudiantes.ver")),
+    db: Session = Depends(get_db),
+):
+    """Peso de «Descargar para usar sin wifi» (estudiantes activos): total y
+    por sede, para mostrarlo antes de descargar."""
+    activos = crud.listar_estudiantes(db, estado="ACTIVO")
+    por_sede: dict[int, list] = {}
+    for e in activos:
+        por_sede.setdefault(e.sede_id, []).append(e)
+    sedes = {s.id: s.nombre for s in db.query(models.Sede).all()}
+    return {
+        "total": crud.resumen_descarga_sin_conexion(db, activos),
+        "sedes": [
+            {"sede_id": sede_id, "nombre": sedes.get(sede_id, ""), **crud.resumen_descarga_sin_conexion(db, ests)}
+            for sede_id, ests in sorted(por_sede.items(), key=lambda x: sedes.get(x[0], ""))
+        ],
+    }
+
+
+@router.post("/matricula-nueva", response_model=schemas.Estudiante, status_code=201)
+def matricular_estudiante_nuevo(
+    solicitud: schemas.MatriculaNuevaSolicitud,
+    identidad: auth.Identidad = Depends(rbac.requiere("estudiantes.crear")),
+    db: Session = Depends(get_db),
+):
+    """Matricula un estudiante que todavía no está en el Excel oficial / SIMAT:
+    lo crea con sus datos y su ficha de matrícula en un solo paso, marcado
+    "pendiente SIMAT" y con quién lo matriculó (la sesión de esta petición)."""
+    datos = solicitud.estudiante
+    if crud.buscar_por_documento(db, datos.documento.strip()):
+        raise HTTPException(status_code=409, detail="Ya existe un estudiante registrado con ese documento")
+    if datos.sede_id is None or db.get(models.Sede, datos.sede_id) is None:
+        raise HTTPException(status_code=400, detail="Escoja la sede del estudiante.")
+    nuevo = models.Estudiante(**{**datos.model_dump(), "documento": datos.documento.strip()})
+    nuevo.pendiente_simat = True
+    nuevo.creado_por_id = identidad.usuario.id
+    nuevo.creado_en = fechas.ahora_utc()
+    db.add(nuevo)
+    db.flush()
+    ficha = models.DatosFichaEstudiante(estudiante_id=nuevo.id, actualizado_por_id=identidad.usuario.id)
+    datos_ficha.campos_a_datos(solicitud.campos_ficha, ficha)
+    db.add(ficha)
+    db.commit()
+    db.refresh(nuevo)
+    return nuevo
+
+
+@router.post("/{estudiante_id}/confirmar-simat", response_model=schemas.Estudiante)
+def confirmar_en_simat(
+    estudiante_id: int,
+    _identidad: auth.Identidad = Depends(rbac.requiere("estudiantes.editar")),
+    db: Session = Depends(get_db),
+):
+    """Quita el aviso "pendiente SIMAT": ya se confirmó que el estudiante
+    nuevo quedó registrado en SIMAT."""
+    e = crud.obtener_estudiante(db, estudiante_id)
+    if e is None:
+        raise HTTPException(status_code=404, detail="Estudiante no encontrado")
+    e.pendiente_simat = False
+    db.commit()
+    db.refresh(e)
+    return e
+
+
 @router.post("", response_model=schemas.Estudiante, status_code=201)
 def crear_estudiante(
     estudiante: schemas.EstudianteCreate,

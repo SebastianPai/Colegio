@@ -1,6 +1,9 @@
 import datetime as dt
+import re
+import unicodedata
+from pathlib import Path
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, LargeBinary, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from . import fechas
@@ -94,6 +97,38 @@ class Estudiante(Base):
     # colegio); False = no pertenece a ninguno.
     resguardo: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
 
+    # Matriculado aquí (Matrícula → estudiante nuevo) y todavía sin confirmar
+    # que ya está en SIMAT: se muestra el aviso "Nuevo · pendiente SIMAT" en
+    # la ficha y en el listado hasta que alguien lo confirma. También queda
+    # quién lo matriculó (su sesión) y cuándo. Los importados del Excel
+    # oficial no tienen nada de esto.
+    pendiente_simat: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    creado_por_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
+    creado_en: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    creado_por: Mapped["Usuario | None"] = relationship(foreign_keys=[creado_por_id])
+
+    @property
+    def creado_por_nombre(self) -> str | None:
+        return self.creado_por.nombre if self.creado_por else None
+
+    @property
+    def matricula_nueva_este_anio(self) -> bool:
+        """Recién matriculado aquí este año lectivo (y aún pendiente SIMAT):
+        su ficha es la de ESTE año (Est. NUEVO), no la renovación del año
+        siguiente que llevan los antiguos."""
+        return bool(
+            self.pendiente_simat
+            and self.creado_en
+            and fechas.hoy_colombia(instante=self.creado_en).year == fechas.anio_lectivo_actual()
+        )
+
+    @property
+    def anio_ficha_matricula(self) -> int:
+        """Año escolar de su ficha de matrícula: el actual para un estudiante
+        nuevo de este año; el siguiente (renovación) para los demás."""
+        actual = fechas.anio_lectivo_actual()
+        return actual if self.matricula_nueva_este_anio else actual + 1
+
     sede_id: Mapped[int | None] = mapped_column(ForeignKey("sedes.id"), nullable=True)
     sede: Mapped[Sede | None] = relationship(back_populates="estudiantes")
 
@@ -127,6 +162,9 @@ class Estudiante(Base):
         return f"{nombre_grado} - {nombre_division}"
 
 
+CARPETA_DOCUMENTOS = Path(__file__).resolve().parent.parent / "uploads" / "fotos"
+
+
 class FotoEstudiante(Base):
     """Documentos escaneados/fotografiados del estudiante: cantidad libre
     (ficha de matrícula página 1 y 2, cédulas de los padres, certificado de
@@ -148,12 +186,33 @@ class FotoEstudiante(Base):
     nombre_archivo: Mapped[str] = mapped_column(String(255))
     orden: Mapped[int] = mapped_column(default=0)
     subido_en: Mapped[dt.datetime] = mapped_column(default=dt.datetime.utcnow)
+    # Lo pone el celular a cada subida (cola sin conexión, ver
+    # frontend/static/js/sin_conexion.js): un reintento con el mismo valor
+    # devuelve el documento ya guardado en vez de duplicarlo.
+    uuid_cliente: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
     estudiante: Mapped["Estudiante"] = relationship(back_populates="fotos")
 
     @property
     def es_pdf(self) -> bool:
         return self.nombre_archivo.lower().endswith(".pdf")
+
+    @property
+    def nombre_descarga(self) -> str:
+        """Nombre legible del archivo ("Ficha de matrícula - Página 1" →
+        "ficha_de_matricula_pagina_1.jpg") en vez del uuid con que se guarda."""
+        base = unicodedata.normalize("NFKD", self.etiqueta or "").encode("ascii", "ignore").decode()
+        base = re.sub(r"[^a-z0-9]+", "_", base.lower()).strip("_") or "documento"
+        return base + Path(self.nombre_archivo).suffix.lower()
+
+    @property
+    def tamano_bytes(self) -> int | None:
+        """Tamaño del archivo en disco (ya comprimido), para mostrarlo en la
+        tabla de documentos. None si el archivo ya no está."""
+        try:
+            return (CARPETA_DOCUMENTOS / self.nombre_archivo).stat().st_size
+        except OSError:
+            return None
 
 
 class HistorialDocumentoEstudiante(Base):
@@ -346,6 +405,37 @@ class NotaSapred(Base):
     estudiante: Mapped[Estudiante] = relationship()
 
 
+class DocenteAreaPeriodo(Base):
+    """Quién dicta cada materia en cada grupo, PERIODO POR PERIODO, tal como
+    lo dice el boletín de SAPRED ("PROFESOR: ..."). AsignacionDocente es una
+    sola fila por año (y la primera que llegó se queda): si a mitad de año
+    cambia el profesor de Matemáticas de 7-2, eso solo se ve aquí. area_id
+    None = director de grupo. Se llena al importar el boletín (crud.
+    importar_bloque_boletin); docente_id queda None cuando el nombre del
+    boletín no coincide con ningún docente de la base, y nombre_sapred
+    guarda el nombre tal cual para poder revisarlo."""
+
+    __tablename__ = "docentes_area_periodo"
+    __table_args__ = (
+        Index("ix_docente_area_periodo_grupo", "anio_lectivo", "sede_id", "grado", "curso", "area_id", "periodo"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    anio_lectivo: Mapped[int]
+    periodo: Mapped[int]
+    sede_id: Mapped[int] = mapped_column(ForeignKey("sedes.id"))
+    grado: Mapped[int]
+    curso: Mapped[int | None] = mapped_column(nullable=True)
+    area_id: Mapped[int | None] = mapped_column(ForeignKey("areas.id"), nullable=True)
+    docente_id: Mapped[int | None] = mapped_column(ForeignKey("docentes.id"), nullable=True)
+    nombre_sapred: Mapped[str] = mapped_column(String(200))
+    actualizado_en: Mapped[dt.datetime] = mapped_column(default=dt.datetime.utcnow)
+
+    sede: Mapped["Sede"] = relationship()
+    area: Mapped[Area | None] = relationship()
+    docente: Mapped[Docente | None] = relationship()
+
+
 class HallazgoConciliacion(Base):
     """Historial persistente de discrepancias de GRUPO entre SIMAC y SAPRED
     (ver conciliacion.py, sección "diferencia" campo="grupo"). La
@@ -476,6 +566,11 @@ class AuditoriaSapred(Base):
     periodo: Mapped[int] = mapped_column(default=1)
     grado: Mapped[int | None] = mapped_column(nullable=True)  # None = todos los grados
     sede_ids: Mapped[str | None] = mapped_column(String(500), nullable=True)  # ids separados por coma, None = todas
+    # Varios periodos / grados en una sola corrida, separados por coma (ej.
+    # "1,2,3" y "5,7,9"). None = solo `periodo` / `grado` de arriba (las
+    # corridas viejas). `periodo` queda con el primero, para lo que ya lo lee.
+    periodos: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    grados: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     # Qué reporte de SAPRED audita/genera esta corrida:
     #   'notas'       = "Consolidado de Asignaturas por periodo" (notas numéricas)
@@ -1474,3 +1569,19 @@ class ResultadoIcfes(Base):
     importado_en: Mapped[dt.datetime] = mapped_column(DateTime, default=fechas.ahora_utc)
 
     estudiante: Mapped["Estudiante | None"] = relationship()
+
+
+class OperacionCliente(Base):
+    """Escrituras recibidas con encabezado X-Id-Operacion y la respuesta que
+    se dio, para no ejecutar dos veces lo que un dispositivo reenvía al volver
+    la conexión (ver operaciones_cliente.py). estado_http None = en curso."""
+
+    __tablename__ = "operaciones_cliente"
+
+    clave: Mapped[str] = mapped_column(String(64), primary_key=True)
+    metodo: Mapped[str] = mapped_column(String(10))
+    ruta: Mapped[str] = mapped_column(String(300))
+    estado_http: Mapped[int | None] = mapped_column(nullable=True)
+    tipo_contenido: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    cuerpo: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    creado: Mapped[dt.datetime] = mapped_column(DateTime, default=fechas.ahora_utc, index=True)

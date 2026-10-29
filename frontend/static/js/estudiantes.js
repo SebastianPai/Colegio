@@ -5,6 +5,7 @@ let paginaActual = 1;
 let porPagina = 50;
 let soloNoVerificados = false;
 let sinCurso = false; // estudiantes con grado pero sin sección/curso asignado (típico de sedes rurales)
+let soloPendientesSimat = false; // matriculados aquí, aún sin registrar en SIMAT
 let mostrarImprimir = false;
 let busquedaActual = "";
 let estadoSeleccionado = "";
@@ -26,6 +27,7 @@ function construirParamsEstudiantes() {
   if (divisionSeleccionada !== null) params.set("curso", divisionSeleccionada);
   if (soloNoVerificados) params.set("solo_no_verificados", "true");
   if (sinCurso) params.set("sin_curso", "true");
+  if (soloPendientesSimat) params.set("pendiente_simat", "true");
   if (busquedaActual) params.set("q", busquedaActual);
   if (estadoSeleccionado) params.set("estado", estadoSeleccionado);
   params.set("pagina", paginaActual);
@@ -86,6 +88,7 @@ const hayFiltrosEstudiantes = () =>
       estadoSeleccionado ||
       soloNoVerificados ||
       sinCurso ||
+      soloPendientesSimat ||
       busquedaActual
   );
 
@@ -106,7 +109,7 @@ async function renderEstudiantes() {
 
     <div class="buscador-principal con-limpiar no-imprimir">
       <span class="buscador-principal-icono" aria-hidden="true"><i data-lucide=search class=ico></i> </span>
-      <input type="text" id="buscar" placeholder="Buscar por nombre o documento..." value="${esc(busquedaActual)}" aria-label="Buscar estudiante por nombre o documento" autocomplete="off" />
+      <input type="text" id="buscar" placeholder="Nombre, documento o grupo (ej. 5-1, o 5-1 garcia)" value="${esc(busquedaActual)}" aria-label="Buscar estudiante por nombre, documento o grupo" autocomplete="off" />
       <button type="button" class="buscador-limpiar" id="buscar-limpiar" aria-label="Borrar búsqueda" ${busquedaActual ? "" : "hidden"}></button>
     </div>
 
@@ -182,7 +185,7 @@ async function refrescarEstudiantes({ desplazar = false } = {}) {
     // "Estudiantes" cuenta lo mismo que la lista salvo por Estado / no
     // verificados / sin sección: si esos no están activos son el mismo número
     // y se ahorra una petición.
-    const hayExtras = Boolean(estadoSeleccionado || soloNoVerificados || sinCurso);
+    const hayExtras = Boolean(estadoSeleccionado || soloNoVerificados || sinCurso || soloPendientesSimat);
     const [resultado, totalContextoExtra, totalActivos, totalPendientes, totalSinCurso] = await Promise.all([
       api(`/api/estudiantes/pagina?${construirParamsEstudiantes()}`),
       hayExtras ? contarEstudiantes({}) : Promise.resolve(null),
@@ -265,6 +268,7 @@ function chipsFiltrosEstudiantes(sedes) {
   if (estadoSeleccionado) chips.push({ id: "estado", texto: "Estado: Activos" });
   if (soloNoVerificados) chips.push({ id: "no-verificados", texto: "Solo no verificados" });
   if (sinCurso) chips.push({ id: "sin-curso", texto: "Sin sección asignada" });
+  if (soloPendientesSimat) chips.push({ id: "pendiente-simat", texto: "Nuevos · pendiente SIMAT" });
   return chips;
 }
 
@@ -274,7 +278,7 @@ function pintarFiltrosEstudiantes(sedes) {
   const divisionesDisponibles =
     gradoSeleccionado !== null ? estGradosData.find((g) => g.grado === gradoSeleccionado)?.divisiones || [] : [];
   const chips = chipsFiltrosEstudiantes(sedes);
-  const nSecundarios = Number(soloNoVerificados) + Number(sinCurso);
+  const nSecundarios = Number(soloNoVerificados) + Number(sinCurso) + Number(soloPendientesSimat);
 
   zona.innerHTML = `
     <div class="barra-filtros">
@@ -320,6 +324,9 @@ function pintarFiltrosEstudiantes(sedes) {
           </label>
           <label class="check-linea filtro-check">
             <input type="checkbox" id="filtro-sin-curso" ${sinCurso ? "checked" : ""} /> Sin sección asignada
+          </label>
+          <label class="check-linea filtro-check">
+            <input type="checkbox" id="filtro-pendiente-simat" ${soloPendientesSimat ? "checked" : ""} /> Nuevos · pendiente SIMAT
           </label>
         </div>
       </details>
@@ -386,6 +393,11 @@ function vincularFiltrosEstudiantes() {
       sinCurso = e.target.checked;
     })
   );
+  document.getElementById("filtro-pendiente-simat").addEventListener("change", (e) =>
+    cambiarFiltroEstudiantes(() => {
+      soloPendientesSimat = e.target.checked;
+    })
+  );
   // "Más filtros" se mantiene abierto mientras se marcan las casillas, aunque
   // la barra se repinte; se cierra al hacer clic fuera (core.js) o con Escape.
   document.getElementById("menu-mas-filtros").addEventListener("toggle", (e) => {
@@ -401,6 +413,7 @@ function vincularFiltrosEstudiantes() {
       estadoSeleccionado = "";
       soloNoVerificados = false;
       sinCurso = false;
+      soloPendientesSimat = false;
       busquedaActual = "";
       const buscador = document.getElementById("buscar");
       if (buscador) buscador.value = "";
@@ -435,6 +448,7 @@ function vincularFiltrosEstudiantes() {
           case "estado": estadoSeleccionado = ""; break;
           case "no-verificados": soloNoVerificados = false; break;
           case "sin-curso": sinCurso = false; break;
+          case "pendiente-simat": soloPendientesSimat = false; break;
         }
       })
     );
@@ -548,6 +562,22 @@ function vincularListaEstudiantes() {
 
   document.querySelectorAll("[data-accion-ver]").forEach((btn) => {
     btn.addEventListener("click", () => abrir(Number(btn.dataset.accionVer)));
+  });
+
+  // Borrar no tiene vuelta atrás. Si ya tiene notas, constancias o boletines,
+  // el servidor no lo deja (409) y se explica que se pase a RETIRADO.
+  document.querySelectorAll("[data-accion-eliminar]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      btn.closest("details").open = false;
+      const { nombre, documento } = btn.dataset;
+      if (!confirm(`¿Eliminar a ${nombre} (doc. ${documento})?\n\nSe borra del sistema con su ficha, fotos y documentos. No se puede deshacer.`)) return;
+      try {
+        await api(`/api/estudiantes/${btn.dataset.accionEliminar}`, { method: "DELETE", sinCola: true });
+        refrescarEstudiantes();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
   });
 
   document.querySelectorAll("[data-accion-imprimir-grupo]").forEach((btn) => {
@@ -731,6 +761,11 @@ function filaEstudiante(e, mostrarSede) {
             ${
               e.sede_id != null
                 ? `<button type="button" class="item-menu" data-accion-imprimir-grupo="${grupoImprimir}">Imprimir lista de su grupo</button>`
+                : ""
+            }
+            ${
+              tienePermiso("estudiantes.eliminar")
+                ? `<button type="button" class="item-menu item-peligro" data-accion-eliminar="${e.id}" data-nombre="${esc(nombre)}" data-documento="${esc(e.documento)}">Eliminar estudiante</button>`
                 : ""
             }
           </div>

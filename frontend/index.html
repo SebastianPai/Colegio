@@ -14,7 +14,7 @@
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-title" content="IETABA" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-  <link rel="stylesheet" href="/static/style.css?v=g34t" />
+  <link rel="stylesheet" href="/static/style.css?v=g36o" />
   <!-- Fase 4.0: estilos de las pantallas de autenticación. No se tocó
        style.css (fuera del alcance permitido para esta fase); se reutilizan
        las variables y clases (.form-grid, .boton, .alerta-caja) que ya
@@ -145,7 +145,7 @@
       <nav class="sidebar-nav" aria-label="Navegación principal">
         <div class="nav-grupo">
           <span class="nav-grupo-titulo">Estudiantes</span>
-          <button data-vista="estudiantes" class="tab" data-permiso="estudiantes.ver">Listado</button>
+          <button data-vista="estudiantes" class="tab activo" data-permiso="estudiantes.ver">Buscar estudiante</button>
           <button data-vista="agregar" class="tab" data-permiso="estudiantes.crear">Matrícula</button>
           <button type="button" class="tab-proximamente" disabled title="Próximamente disponible">
             Historial <span class="etiqueta-proximamente">Pronto</span>
@@ -163,10 +163,10 @@
           <button data-vista="orientacion" data-or-vista="bandeja" class="tab" data-permiso="observaciones.ver_confidenciales">Bandeja</button>
           <button data-vista="orientacion" data-or-vista="diagnostico-grados" class="tab" data-permiso="diagnosticos.ver">Por grado</button>
           <button data-vista="orientacion" data-or-vista="diagnostico-estudiante" class="tab" data-permiso="diagnosticos.ver">Por estudiante</button>
+          <button data-vista="horario" class="tab" data-permiso="horario.ver" data-solo-orientacion>Horarios</button>
         </div>
         <div class="nav-grupo">
           <span class="nav-grupo-titulo">Gestión</span>
-          <button data-vista="sedes" class="tab activo" data-permiso="sedes.ver">Sedes</button>
           <button data-vista="horario" class="tab" data-permiso="horario.ver">Horarios</button>
           <button data-vista="boletines" class="tab" data-permiso="boletines.ver">Boletines</button>
           <button data-vista="notas" class="tab" data-permiso="boletines.ver">Notas</button>
@@ -175,6 +175,7 @@
           <button data-vista="asistencia" class="tab" data-permiso="asistencia.estadisticas">Asistencia</button>
           <button data-vista="analisis" class="tab" data-permiso="boletines.ver">Análisis académico</button>
           <button data-vista="icfes" class="tab" data-permiso="boletines.ver">Resultados ICFES</button>
+          <button data-vista="sedes" class="tab" data-permiso="sedes.ver">Sedes</button>
         </div>
         <div class="nav-grupo">
           <span class="nav-grupo-titulo">Administración</span>
@@ -209,18 +210,19 @@
        deja la pantalla de "Cargando…" fija para siempre. -->
   <script src="/static/vendor/lucide.min.js"></script>
   <script src="/static/js/comun.js?v=g9"></script>
-  <script src="/static/js/auth.js?v=g10"></script>
-  <script src="/static/js/core.js?v=g11"></script>
+  <script src="/static/js/auth.js?v=g11"></script>
+  <script src="/static/js/core.js?v=g13"></script>
   <script src="/static/js/sedes.js?v=g8"></script>
   <script src="/static/js/reportes.js?v=g14"></script>
-  <script src="/static/js/estudiantes.js?v=g10"></script>
-  <script src="/static/js/agregar.js?v=g9"></script>
-  <script src="/static/js/constancias.js?v=g9"></script>
+  <script src="/static/js/estudiantes.js?v=g14"></script>
+  <script src="/static/js/agregar.js?v=g13"></script>
+  <script src="/static/js/constancias.js?v=g10"></script>
   <script src="/static/js/boletines.js?v=g10"></script>
   <script src="/static/js/horario.js?v=g8"></script>
   <script src="/static/js/horario_consulta.js?v=g8"></script>
   <script src="/static/js/scanner.js?v=g9"></script>
-  <script src="/static/js/ficha.js?v=g26"></script>
+  <script src="/static/js/ficha.js?v=g29"></script>
+  <script src="/static/js/libro_matricula.js?v=g5"></script>
   <script src="/static/js/admin.js?v=g8"></script>
   <script src="/static/js/alertas.js?v=g8"></script>
   <script src="/static/js/asistencia.js?v=g8"></script>
@@ -230,6 +232,6 @@
   <script src="/static/js/docente.js?v=g9"></script>
   <script src="/static/js/orientacion.js?v=g8"></script>
   <script src="/static/js/sin_conexion.js?v=g10"></script>
-  <script src="/static/js/main.js?v=g8"></script>
+  <script src="/static/js/main.js?v=g9"></script>
 </body>
 </html>

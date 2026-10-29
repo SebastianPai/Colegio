@@ -137,6 +137,7 @@ def asegurar_columnas_sqlite() -> None:
                 conn.execute(text("ALTER TABLE estudiantes ADD COLUMN resguardo BOOLEAN DEFAULT 1 NOT NULL"))
         for columna, tipo in (
             ("pendiente_simat", "BOOLEAN DEFAULT 0 NOT NULL"),
+            ("anio_matricula", "INTEGER"),
             ("creado_por_id", "INTEGER REFERENCES usuarios(id)"),
             ("creado_en", "DATETIME"),
         ):
@@ -239,6 +240,25 @@ def asegurar_columnas_sqlite() -> None:
             "confianza": "ALTER TABLE diagnosticos_mencion ADD COLUMN confianza VARCHAR(10) DEFAULT 'alta' NOT NULL",
             "texto_compartido": "ALTER TABLE diagnosticos_mencion ADD COLUMN texto_compartido BOOLEAN DEFAULT 0 NOT NULL",
             "candidatos_json": "ALTER TABLE diagnosticos_mencion ADD COLUMN candidatos_json TEXT",
+        }
+        faltantes = [sql for col, sql in nuevas.items() if col not in columnas]
+        if faltantes:
+            with engine.begin() as conn:
+                for sql in faltantes:
+                    conn.execute(text(sql))
+
+    if "datos_ficha_estudiante" in tablas:
+        columnas = {c["name"] for c in inspector.get_columns("datos_ficha_estudiante")}
+        nuevas = {
+            "padres": "ALTER TABLE datos_ficha_estudiante ADD COLUMN padres VARCHAR(250)",
+            "telefono": "ALTER TABLE datos_ficha_estudiante ADD COLUMN telefono VARCHAR(40)",
+            "huerfano": "ALTER TABLE datos_ficha_estudiante ADD COLUMN huerfano BOOLEAN",
+            "necesita_albergue": "ALTER TABLE datos_ficha_estudiante ADD COLUMN necesita_albergue BOOLEAN",
+            "grado_anterior": "ALTER TABLE datos_ficha_estudiante ADD COLUMN grado_anterior VARCHAR(20)",
+            "retiro_anio_anterior": "ALTER TABLE datos_ficha_estudiante ADD COLUMN retiro_anio_anterior BOOLEAN",
+            "motivo_retiro": "ALTER TABLE datos_ficha_estudiante ADD COLUMN motivo_retiro VARCHAR(10)",
+            "promovido": "ALTER TABLE datos_ficha_estudiante ADD COLUMN promovido BOOLEAN",
+            "repitente": "ALTER TABLE datos_ficha_estudiante ADD COLUMN repitente BOOLEAN",
         }
         faltantes = [sql for col, sql in nuevas.items() if col not in columnas]
         if faltantes:

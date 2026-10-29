@@ -1,7 +1,8 @@
+import re
 import datetime as dt
 import json
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from . import conciliacion, fechas, models, schemas
@@ -131,6 +132,9 @@ def obtener_o_crear_sede(db: Session, datos: schemas.SedeCreate) -> models.Sede:
 # --- Estudiantes ---------------------------------------------------------
 
 
+_GRUPO_EN_BUSQUEDA = re.compile(r"(?<!\d)(\d{1,2})\s*[-–]\s*(\d{1,2})(?!\d)")
+
+
 def _filtrar_estudiantes(
     stmt,
     sede_id: int | None = None,
@@ -140,6 +144,7 @@ def _filtrar_estudiantes(
     busqueda: str | None = None,
     solo_no_verificados: bool = False,
     sin_curso: bool = False,
+    pendiente_simat: bool = False,
 ):
     if sede_id is not None:
         stmt = stmt.where(models.Estudiante.sede_id == sede_id)
@@ -157,11 +162,21 @@ def _filtrar_estudiantes(
         stmt = stmt.where(func.upper(models.Estudiante.estado) == estado.upper())
     if solo_no_verificados:
         stmt = stmt.where(models.Estudiante.verificado_matricula.is_(False))
+    # Matriculados aquí que todavía no se han registrado en SIMAT.
+    if pendiente_simat:
+        stmt = stmt.where(models.Estudiante.pendiente_simat.is_(True))
+    if busqueda:
+        # "5-1" en la búsqueda = grado 5, curso 1 (se puede combinar con un
+        # nombre: "5-1 garcia"). Lo demás se busca palabra por palabra, en
+        # cualquier orden: "juan garcia" encuentra a "Juan Carlos García".
+        m = _GRUPO_EN_BUSQUEDA.search(busqueda)
+        if m:
+            stmt = stmt.where(models.Estudiante.grado == int(m.group(1)), models.Estudiante.curso == int(m.group(2)))
+            busqueda = (busqueda[: m.start()] + " " + busqueda[m.end():]).strip()
     if busqueda:
         # Sin tildes y sin distinguir mayúsculas de ambos lados: "bolanos",
         # "BOLAÑOS" y "Bolaños" encuentran a los mismos. (El lower() de SQLite
         # no pliega la Ñ, por eso no bastaba con pasar el patrón a minúscula.)
-        patron = f"%{sin_tildes(busqueda)}%"
         nombre_completo = func.sin_tildes(
             models.Estudiante.primer_nombre
             + " "
@@ -171,9 +186,11 @@ def _filtrar_estudiantes(
             + " "
             + func.coalesce(models.Estudiante.segundo_apellido, "")
         )
-        stmt = stmt.where(
-            nombre_completo.like(patron) | func.sin_tildes(models.Estudiante.documento).like(patron)
-        )
+        for palabra in sin_tildes(busqueda).split():
+            patron = f"%{palabra}%"
+            stmt = stmt.where(
+                nombre_completo.like(patron) | func.sin_tildes(models.Estudiante.documento).like(patron)
+            )
     return stmt
 
 
@@ -221,11 +238,13 @@ def listar_estudiantes_paginado(
     busqueda: str | None = None,
     solo_no_verificados: bool = False,
     sin_curso: bool = False,
+    pendiente_simat: bool = False,
     pagina: int = 1,
     por_pagina: int = 50,
 ) -> tuple[list[models.Estudiante], int]:
     base = _filtrar_estudiantes(
-        select(models.Estudiante), sede_id, grado, curso, estado, busqueda, solo_no_verificados, sin_curso
+        select(models.Estudiante), sede_id, grado, curso, estado, busqueda, solo_no_verificados, sin_curso,
+        pendiente_simat,
     )
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
 
@@ -306,6 +325,9 @@ def eliminar_estudiante(db: Session, estudiante_id: int) -> bool:
     db_estudiante = db.get(models.Estudiante, estudiante_id)
     if db_estudiante is None:
         return False
+    # Los datos de la ficha (los que pide la matrícula) son solo de este
+    # estudiante: se van con él. Sin esto nadie recién matriculado se podía borrar.
+    db.execute(delete(models.DatosFichaEstudiante).where(models.DatosFichaEstudiante.estudiante_id == estudiante_id))
     db.delete(db_estudiante)
     try:
         db.commit()

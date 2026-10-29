@@ -89,6 +89,7 @@ class MatriculaNuevaSolicitud(BaseModel):
 
     estudiante: EstudianteCreate
     campos_ficha: dict[str, str] = {}
+    anio_matricula: int  # año escolar para el que se matricula (se escoge en el formulario)
 
 
 class EstudianteUpdate(BaseModel):
@@ -180,6 +181,7 @@ class PazYSalvoEstudiante(BaseModel):
     sede_id: int
     sede_nombre: str
     grupo: str
+    grado: int
 
 
 class PazYSalvoSolicitud(BaseModel):

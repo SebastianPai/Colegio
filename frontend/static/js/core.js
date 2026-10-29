@@ -6,7 +6,7 @@
 const app = document.getElementById("app");
 const tabs = document.querySelectorAll(".tab");
 
-let vistaActual = "sedes";
+let vistaActual = "estudiantes"; // la pantalla principal es buscar estudiantes
 let sedeSeleccionada = null;
 let gradoSeleccionado = null;
 let divisionSeleccionada = null; // null = general (todo el grado, todas las divisiones)
@@ -18,7 +18,7 @@ let vistaAnterior = "estudiantes";
 // equipo/pestaña no herede la vista, los filtros ni el contenido ya
 // renderizado de la sesión anterior.
 function resetearEstadoNavegacion() {
-  vistaActual = "sedes";
+  vistaActual = "estudiantes";
   sedeSeleccionada = null;
   gradoSeleccionado = null;
   divisionSeleccionada = null;
@@ -37,7 +37,7 @@ function resetearEstadoNavegacion() {
   }
   if (typeof fichaModoDocente !== "undefined") fichaModoDocente = false;
   tabs.forEach((t) => t.classList.remove("activo"));
-  document.querySelector('[data-vista="sedes"]')?.classList.add("activo");
+  document.querySelector('[data-vista="estudiantes"]')?.classList.add("activo");
   app.innerHTML = "";
 }
 
@@ -278,6 +278,40 @@ document.addEventListener(
 document.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape") document.querySelectorAll(SELECTOR_MENUS_AUTOCIERRE).forEach((d) => (d.open = false));
 });
+
+// El menú ⋮ vive dentro de tablas con overflow:hidden (esquinas redondeadas)
+// o con scroll horizontal, que lo recortaban (con 1 o 2 resultados casi no se
+// veía). Abierto, se posiciona fijo sobre la pantalla: debajo del botón, o
+// encima si abajo no cabe. Al hacer scroll se cierra para no quedar flotando.
+document.addEventListener(
+  "toggle",
+  (ev) => {
+    const d = ev.target;
+    if (!(d instanceof HTMLDetailsElement) || !d.classList.contains("menu-fila")) return;
+    const lista = d.querySelector(".menu-herramientas-lista");
+    if (!lista) return;
+    if (!d.open) {
+      lista.removeAttribute("style");
+      return;
+    }
+    const boton = d.querySelector("summary").getBoundingClientRect();
+    Object.assign(lista.style, { position: "fixed", top: "0px", left: "0px", right: "auto", bottom: "auto", zIndex: 1000 });
+    const menu = lista.getBoundingClientRect();
+    const abajo = boton.bottom + 6;
+    const top = abajo + menu.height <= window.innerHeight - 8 ? abajo : Math.max(8, boton.top - 6 - menu.height);
+    const left = Math.min(Math.max(8, boton.right - menu.width), window.innerWidth - menu.width - 8);
+    Object.assign(lista.style, { top: `${top}px`, left: `${left}px` });
+  },
+  true
+);
+window.addEventListener(
+  "scroll",
+  (ev) => {
+    if (ev.target instanceof Element && ev.target.closest(".menu-herramientas-lista")) return;
+    document.querySelectorAll("details.menu-fila[open]").forEach((d) => (d.open = false));
+  },
+  true
+);
 
 // --- Ícono de ayuda "(?)" reutilizable --------------------------------------
 // Para explicar en lenguaje simple qué significa un término técnico (ej.

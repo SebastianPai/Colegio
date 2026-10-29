@@ -357,6 +357,8 @@ details[open] > .menu-herramientas-lista { display: flex; }
   display: block;
 }
 .menu-herramientas-lista .item-menu:hover { background: var(--azul-suave); }
+.menu-herramientas-lista .item-menu.item-peligro { color: #b42318; border-top: 1px solid var(--borde); border-radius: 0 0 6px 6px; margin-top: 2px; }
+.menu-herramientas-lista .item-menu.item-peligro:hover { background: #fdecea; }
 
 /* --- Encabezado de página (título + subtítulo + acción principal) ------- */
 
@@ -3692,19 +3694,9 @@ body:has(#sc-aviso) .sc-aviso-listo { bottom: calc(80px + env(safe-area-inset-bo
   .menu-mas-filtros .menu-herramientas-lista { left: auto; right: 0; }
 }
 
-/* --- Menú ⋮ de la última fila ---------------------------------------------------
-   .tabla-scroll (overflow-x:auto) recorta también en vertical, así que el menú
-   de las últimas filas se desplegaba hacia abajo y quedaba cortado: solo asomaba
-   una franja. Las últimas filas lo abren hacia arriba; y si la tabla tiene 4
-   filas o menos (no hay sitio arriba ni abajo) se reserva espacio bajo ella. */
-.tabla-scroll:not(.tabla-corta) .tabla-estudiantes tbody tr:nth-last-child(-n+3) .menu-fila .menu-herramientas-lista,
-.tabla-scroll:not(.tabla-corta) .tabla-usuarios tbody tr:nth-last-child(-n+3) .menu-fila .menu-herramientas-lista {
-  top: auto;
-  bottom: calc(100% + 6px);
-}
-.tabla-scroll.tabla-corta { padding-bottom: 120px; }
-/* Usuarios: menú de hasta 6 acciones. */
-.tabla-scroll.tabla-corta-alta { padding-bottom: 260px; }
+/* --- Menú ⋮ de fila ---------------------------------------------------------------
+   Abierto se posiciona fijo sobre la pantalla (core.js, evento "toggle"): así
+   ni la tabla (overflow:hidden) ni .tabla-scroll lo recortan. */
 
 /* ==========================================================================
    HORARIOS (js/horario.js + js/horario_consulta.js)
@@ -5510,6 +5502,9 @@ body.anz-expo-abierta { overflow: hidden; }
 .form-grid .matr-si-no label.check-linea { display: inline-flex; flex-direction: row; align-items: center; gap: 5px; color: var(--texto); }
 .form-grid .matr-si-no input { width: auto; margin: 0; }
 .matr-discapacidades { display: flex; flex-wrap: wrap; gap: 6px 16px; width: 100%; padding-top: 6px; }
+/* El display:flex de arriba le ganaba a [hidden]: con "No" se seguían viendo. */
+.matr-discapacidades[hidden], .form-grid label[hidden] { display: none; }
+.matr-sede-fija { background: var(--fondo); color: var(--texto); }
 .matr-aviso-simat { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 
 /* --- Ficha → Constancias: escoger el documento (ficha.js) --- */
@@ -5519,3 +5514,83 @@ body.anz-expo-abierta { overflow: hidden; }
 .constancia-tipo span { display: flex; flex-direction: column; gap: 2px; }
 .constancia-tipo small { color: var(--gris); font-size: 12.5px; }
 .constancia-tipo.activo { border-color: var(--azul); background: var(--azul-suave); }
+
+/* === Celular: todo más compacto =========================================
+   En el celular las pantallas se veían "grandes": tarjetas de cifras que
+   ocupaban media pantalla, títulos enormes y mucho relleno, y la gente
+   terminaba alejando con zoom. Este bloque va AL FINAL a propósito, para
+   ganarle a las reglas de cada módulo sin subirles la especificidad.
+   Los campos de texto quedan en 16px: con menos, el iPhone hace zoom solo
+   al tocarlos y la página queda ampliada. */
+@media (max-width: 640px) {
+  .contenido,
+  body.sidebar-colapsada .contenido { padding: 10px 12px 24px; }
+  .topbar-movil { padding: 6px 10px; }
+  .topbar-movil-toggle { width: 34px; height: 34px; }
+  .marca-movil .marca-logo { height: 28px; width: 28px; }
+  .topbar-movil-wifi { height: 32px; padding: 0 10px; font-size: 13px; margin-top: 0; }
+
+  /* Títulos */
+  .pagina-header { margin-bottom: 12px; gap: 10px; }
+  .pagina-header h1, .hz-titulo h1, .ficha-header h1 { font-size: 19px; margin-bottom: 2px; }
+  .subtitulo-pagina, .ficha-meta { font-size: 13px; line-height: 1.4; }
+  #app h2 { font-size: 16px; }
+  #app h3 { font-size: 15px; }
+  .subtitulo-seccion { margin: 16px 0 8px; font-size: 14px; }
+
+  /* Campos: 16px evita el zoom automático del iPhone; relleno más bajo. */
+  #app input:not([type=checkbox]):not([type=radio]),
+  #app select,
+  #app textarea,
+  .pantalla-auth input:not([type=checkbox]) { font-size: 16px; }
+  .form-grid { gap: 10px; }
+  .form-grid input, .form-grid select { padding: 7px 9px; }
+  .barra-filtros { padding: 10px; gap: 8px; }
+
+  /* Botones */
+  .boton { padding: 8px 14px; font-size: 14px; }
+  .boton-chico { padding: 3px 9px; }
+
+  /* Tarjetas de cifras: 3 por fila, chicas, alineadas a la izquierda. */
+  .resumen-reportes,
+  .resumen-compacta,
+  .resumen-reportes.resumen-compacta { grid-template-columns: repeat(auto-fit, minmax(78px, 1fr)); gap: 6px; margin-bottom: 12px; }
+  .metric-card,
+  .resumen-compacta .metric-card { padding: 7px 9px; min-height: 0; text-align: left; border-radius: 7px; }
+  .metric-card span,
+  .resumen-compacta .metric-card span { font-size: 11px; line-height: 1.25; margin-bottom: 1px; }
+  .metric-card strong,
+  .resumen-compacta .metric-card strong { font-size: 17px; line-height: 1.2; }
+  .metric-card small { font-size: 10.5px; }
+  .hz-kpis, .hz-kpis-mini { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 10px 0; }
+  .hz-kpi { padding: 7px 9px; }
+  .hz-kpi-num { font-size: 17px; }
+  .hz-kpi-txt { font-size: 11.5px; line-height: 1.25; }
+  .hz-kpi-sub { font-size: 10.5px; }
+  .dk-resumen-stat strong { font-size: 17px; }
+
+  /* Pestañas deslizables: sin barra de scroll visible y más juntas. */
+  .subnav-modulo, .hz-tabs, .hz-subtabs, .ox-tabs, .est-tabs, .anz-subnav,
+  .horario-nav-items, .hz-filtro-dia, .anz-control .segmentado {
+    scrollbar-width: none;
+  }
+  .subnav-modulo::-webkit-scrollbar, .hz-tabs::-webkit-scrollbar, .hz-subtabs::-webkit-scrollbar,
+  .ox-tabs::-webkit-scrollbar, .est-tabs::-webkit-scrollbar, .anz-subnav::-webkit-scrollbar,
+  .horario-nav-items::-webkit-scrollbar, .hz-filtro-dia::-webkit-scrollbar,
+  .anz-control .segmentado::-webkit-scrollbar { display: none; }
+  .subnav-modulo { margin-bottom: 12px; }
+  .subnav-item { padding: 8px 10px; font-size: 13px; }
+  .hz-tab { padding: 8px 11px; font-size: 13.5px; }
+  .hz-subtab { padding: 4px 11px; font-size: 13px; }
+
+  /* Tablas y tarjetas */
+  th, td { padding: 7px 8px; font-size: 13px; }
+  th { font-size: 11px; letter-spacing: 0.2px; }
+  .card-salon { padding: 12px; }
+  .card-salon h3 { font-size: 17px; }
+  .grid-salones { gap: 8px; }
+  .seccion-colapsable { padding: 2px 12px; margin-bottom: 10px; }
+  .seccion-colapsable > summary { padding: 10px 0; }
+  .panel-boletines { padding: 12px; }
+  .modal-caja, .modal-caja-ancha { padding: 14px; }
+}

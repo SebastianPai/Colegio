@@ -29,7 +29,7 @@ async function renderConstancias() {
       </select>
     </div>
     ${tienePermiso("constancias.generar")
-      ? `<p><button type="button" class="boton" id="btn-paz-y-salvo"><i data-lucide=graduation-cap class=ico></i> Paz y salvo grado 11 (servicio social)</button></p>`
+      ? `<p><button type="button" class="boton" id="btn-paz-y-salvo"><i data-lucide=graduation-cap class=ico></i> Paz y salvo grados 10 y 11 (servicio social)</button></p>`
       : ""}
     <p>${registros.length} constancia(s) generada(s)</p>
     <table>
@@ -90,22 +90,23 @@ async function renderConstancias() {
   });
 }
 
-// --- Paz y salvo de servicio social (grado 11) ---------------------------------
+// --- Paz y salvo de servicio social (grados 10 y 11) ---------------------------
 // Certificado de las 80 horas de servicio social obligatorio, con el formato
 // oficial (backend/plantillas/paz_y_salvo_servicio_social.docx). Se escogen
-// los estudiantes de 11 y sale un solo Word/PDF con una página por cada uno.
+// los estudiantes de 10 y 11 y sale un solo Word/PDF con una página por cada uno.
 
 let pysEstudiantes = [];
 let pysSeleccionados = new Set();
 let pysLugares = {}; // id -> lugar escrito en pantalla
 let pysSede = "";
+let pysGrado = "";
 
 async function abrirPazYSalvo() {
   document.getElementById("pys-modal")?.remove();
   const modal = document.createElement("div");
   modal.id = "pys-modal";
   modal.className = "modal-fondo";
-  modal.innerHTML = '<div class="modal-caja modal-caja-ancha"><p class="estado-carga">Cargando estudiantes de grado 11...</p></div>';
+  modal.innerHTML = '<div class="modal-caja modal-caja-ancha"><p class="estado-carga">Cargando estudiantes de grado 10 y 11...</p></div>';
   document.body.appendChild(modal);
   modal.addEventListener("click", (ev) => { if (ev.target === modal) modal.remove(); });
   try {
@@ -121,13 +122,15 @@ async function abrirPazYSalvo() {
 
 function pintarPazYSalvo(modal, resultado = null) {
   const sedes = [...new Map(pysEstudiantes.map((e) => [e.sede_id, e.sede_nombre])).entries()];
-  const visibles = pysEstudiantes.filter((e) => !pysSede || String(e.sede_id) === String(pysSede));
+  const visibles = pysEstudiantes.filter(
+    (e) => (!pysSede || String(e.sede_id) === String(pysSede)) && (!pysGrado || String(e.grado) === pysGrado)
+  );
   const marcados = visibles.filter((e) => pysSeleccionados.has(e.id));
   const sinLugar = marcados.filter((e) => !(pysLugares[e.id] || "").trim()).length;
   const tipoCorto = (t) => (t || "—").replace(/\.$/, "");
   modal.querySelector(".modal-caja").innerHTML = `
     <header class="est-modal-head">
-      <h3><i data-lucide=graduation-cap class=ico></i> Paz y salvo de servicio social — grado 11</h3>
+      <h3><i data-lucide=graduation-cap class=ico></i> Paz y salvo de servicio social — grados 10 y 11</h3>
       <button type="button" class="est-visor-cerrar" data-pys-cerrar aria-label="Cerrar"></button>
     </header>
     <p class="pendiente">Certifica las 80 horas de servicio social obligatorio (requisito para el título de bachiller), con el formato oficial
@@ -144,6 +147,10 @@ function pintarPazYSalvo(modal, resultado = null) {
       <select id="pys-sede">
         <option value="">Todas las sedes (${pysEstudiantes.length})</option>
         ${sedes.map(([id, nombre]) => `<option value="${id}" ${String(id) === String(pysSede) ? "selected" : ""}>${esc(nombre)} (${pysEstudiantes.filter((e) => e.sede_id === id).length})</option>`).join("")}
+      </select>
+      <select id="pys-grado">
+        <option value="">Grados 10 y 11</option>
+        ${[10, 11].map((g) => `<option value="${g}" ${String(g) === pysGrado ? "selected" : ""}>Grado ${g} (${pysEstudiantes.filter((e) => e.grado === g).length})</option>`).join("")}
       </select>
       <label class="check-linea"><input type="checkbox" id="pys-todos" ${marcados.length === visibles.length && visibles.length ? "checked" : ""} /> Todos</label>
     </div>
@@ -181,6 +188,7 @@ function pintarPazYSalvo(modal, resultado = null) {
     if (resultado) render(); // el registro de abajo ya trae los nuevos
   });
   caja.querySelector("#pys-sede").addEventListener("change", (e) => { pysSede = e.target.value; pintarPazYSalvo(modal); });
+  caja.querySelector("#pys-grado").addEventListener("change", (e) => { pysGrado = e.target.value; pintarPazYSalvo(modal); });
   caja.querySelector("#pys-todos").addEventListener("change", (e) => {
     visibles.forEach((x) => (e.target.checked ? pysSeleccionados.add(x.id) : pysSeleccionados.delete(x.id)));
     pintarPazYSalvo(modal);

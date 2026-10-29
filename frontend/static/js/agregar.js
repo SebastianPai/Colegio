@@ -58,11 +58,23 @@ async function verificarDocumento() {
   const form = document.getElementById("form-nuevo-estudiante");
   form.addEventListener("submit", guardarNuevoEstudiante);
   vincularTipoDocumentoOtro("tipo_documento");
-  document.getElementById("matr-sede").addEventListener("change", actualizarCursosMatricula);
   document.getElementById("matr-grado").addEventListener("change", actualizarCursosMatricula);
+  actualizarCursosMatricula();
+  form.querySelectorAll('input[name="anio_matricula"]').forEach((r) =>
+    r.addEventListener("change", () => actualizarAnioMatricula(form))
+  );
+  form.querySelectorAll('input[name="sino_huerfano"]').forEach((r) =>
+    r.addEventListener("change", () => actualizarAcudienteMatricula(form))
+  );
+  ["sino_retiro", "sino_promovido", "sino_repitente"].forEach((n) =>
+    form.querySelectorAll(`input[name="${n}"]`).forEach((r) => r.addEventListener("change", () => actualizarSituacionMatricula(form, n)))
+  );
+  form.parentesco_opcion.addEventListener("change", () => actualizarAcudienteMatricula(form));
   form.querySelectorAll('input[name="sino_discap"]').forEach((r) =>
     r.addEventListener("change", () => {
-      document.getElementById("matr-discapacidades").hidden = form.sino_discap.value !== "si";
+      const caja = document.getElementById("matr-discapacidades");
+      caja.hidden = form.sino_discap.value !== "si";
+      if (caja.hidden) caja.querySelectorAll("input").forEach((i) => { i.type === "checkbox" ? (i.checked = false) : (i.value = ""); });
     })
   );
 }
@@ -93,10 +105,67 @@ function siNoFichaHtml(clave, texto) {
     </fieldset>`;
 }
 
+// Tabla del pie de la ficha oficial: en la casilla va solo el número.
+const MOTIVOS_RETIRO_FICHA = [
+  [1, "Costo muy alto o falta dinero"], [2, "Necesita trabajar"], [3, "Responsabilidades familiares"],
+  [4, "Considera que no tiene edad para estudiar"], [5, "Descomposición familiar"],
+  [6, "No le gusta o no le interesa el estudio / padres no quieren que estudie"],
+  [7, "Cambio de lugar de residencia para mejores oportunidades"], [8, "Acompañó (formó hogar)"],
+  [9, "Cruce de ríos peligrosos"], [10, "Falta quien lo acompañe (niños pequeños)"],
+  [11, "Maternidad o paternidad a temprana edad"], [12, "Problema de drogas"], [13, "Por enfermedad"],
+  [14, "Es discapacitado / necesita educación especial"], [15, "Perdió el año o fue expulsado / bajo rendimiento"],
+  [16, "No le gustan los profesores"], [17, "El centro educativo está lejos"],
+  [20, "Influencia de amigos / problemas con compañeros"], [21, "Desplazamiento forzado / orden público"],
+  [22, "Ausencia o mal estado de vías de acceso"], [23, "Creencias étnicas culturales"],
+  [24, "Desconocen la importancia de la educación"], [25, "Otras razones"],
+  [26, "Se matriculó y no asistió"], [28, "Se desconoce la causa"],
+];
+
+// Promovido y repitente se excluyen: marcar uno en "Sí" pone el otro en "No".
+function actualizarSituacionMatricula(form, cambio) {
+  const motivo = document.getElementById("matr-motivo-retiro");
+  motivo.hidden = form.sino_retiro.value !== "si";
+  motivo.querySelector("select").required = !motivo.hidden;
+  if (motivo.hidden) motivo.querySelector("select").value = "";
+  const otro = { sino_promovido: "sino_repitente", sino_repitente: "sino_promovido" }[cambio];
+  if (otro && form[cambio].value === "si") form[otro].value = "no";
+}
+
+const PARENTESCOS_ACUDIENTE = ["Madre", "Padre", "Abuela", "Abuelo", "Tía", "Tío", "Hermana", "Hermano", "Madrina", "Padrino", "Otro"];
+
+// "Hijo(a) de" sobra si el acudiente es la madre o el padre (se toma su
+// nombre) o si es huérfano(a); y un huérfano no puede tener de acudiente a
+// la madre o al padre.
+function actualizarAcudienteMatricula(form) {
+  const huerfano = form.sino_huerfano.value === "si";
+  const select = form.parentesco_opcion;
+  select.querySelectorAll('option[value="Madre"], option[value="Padre"]').forEach((o) => { o.hidden = o.disabled = huerfano; });
+  if (huerfano && ["Madre", "Padre"].includes(select.value)) select.value = "";
+  const otro = document.getElementById("matr-parentesco-otro");
+  otro.hidden = select.value !== "Otro";
+  otro.querySelector("input").required = !otro.hidden;
+  const padres = document.getElementById("matr-padres");
+  padres.hidden = huerfano || ["Madre", "Padre"].includes(select.value);
+  padres.querySelector("input").required = !padres.hidden;
+}
+
 function formularioNuevoEstudiante(documento, sedes) {
+  // Toda matrícula nueva es de la sede principal de IETABA: no se escoge.
+  const sedeIetaba = sedes.find((s) => /I\.?E\.?T\.?A\.?B\.?A/i.test(s.nombre) && s.pertenece_ietaba) || sedes.find((s) => s.pertenece_ietaba);
   const hoy = fechaColombiaISO();
+  const anioActual = Number(hoy.slice(0, 4));
   return `
     <form id="form-nuevo-estudiante" class="matr-form">
+      <section class="matr-seccion">
+        <h3>¿Para qué año escolar es esta matrícula?</h3>
+        <fieldset class="matr-si-no ancho-completo">
+          <label class="check-linea"><input type="radio" name="anio_matricula" value="${anioActual}" required />
+            <strong>${anioActual}</strong> — entra a estudiar ya, este año</label>
+          <label class="check-linea"><input type="radio" name="anio_matricula" value="${anioActual + 1}" />
+            <strong>${anioActual + 1}</strong> — matrícula para el próximo año escolar</label>
+        </fieldset>
+        <p class="pendiente" id="matr-anio-aviso">Escoja el año: con él salen la ficha y el libro de registro de matrícula.</p>
+      </section>
       <section class="matr-seccion">
         <h3>1. Identificación del estudiante</h3>
         <div class="form-grid">
@@ -124,13 +193,11 @@ function formularioNuevoEstudiante(documento, sedes) {
       </section>
 
       <section class="matr-seccion">
-        <h3>2. Matrícula</h3>
+        <h3>2. Matrícula <span class="matr-anio-titulo"></span></h3>
         <div class="form-grid">
           <label>Sede
-            <select name="sede_id" id="matr-sede" required>
-              <option value="">Escoja la sede...</option>
-              ${sedes.map((s) => `<option value="${s.id}">${esc(s.nombre)}</option>`).join("")}
-            </select>
+            <input type="text" value="${esc(sedeIetaba?.nombre || "")}" readonly class="matr-sede-fija" />
+            <input type="hidden" name="sede_id" id="matr-sede" value="${sedeIetaba?.id ?? ""}" />
           </label>
           <label>Grado
             <select name="grado" id="matr-grado" required>
@@ -138,12 +205,46 @@ function formularioNuevoEstudiante(documento, sedes) {
             </select>
           </label>
           <label>Curso / sección
-            <select name="curso" id="matr-curso"><option value="">Sin curso (único grupo)</option></select>
+            <select name="curso" id="matr-curso"><option value="">Pendiente (se asigna después)</option></select>
           </label>
           <label>Fecha de ingreso <input type="date" name="fecha_ingreso" value="${hoy}" required /></label>
           <label>Institución o centro de donde viene <input type="text" name="ficha_procedencia" placeholder="Si viene de otra institución" /></label>
           <label>ID SIMAT (si ya lo tiene) <input type="text" name="id_estud" /></label>
-          <label class="check-linea ancho-completo"><input type="checkbox" name="ficha_sgp" /> Estudiante SGP</label>
+          <label class="check-linea ancho-completo"><input type="checkbox" name="ficha_sgp" checked /> Estudiante SGP</label>
+        </div>
+      </section>
+
+      <section class="matr-seccion">
+        <h3>Situación académica</h3>
+        <div class="form-grid">
+          <label class="ancho-completo"><span id="matr-grado-anterior-texto">¿En qué grado estuvo el año anterior?</span>
+            <select name="grado_anterior" required>
+              <option value="">Escoja...</option>
+              ${NOMBRES_GRADOS.map(([g, nombre]) => `<option value="${g}">${nombre}</option>`).join("")}
+              <option value="NO ESTUDIÓ">No estaba estudiando</option>
+            </select>
+          </label>
+          <fieldset class="matr-si-no">
+            <legend>¿Se retiró de estudiar el año anterior?</legend>
+            <label class="check-linea"><input type="radio" name="sino_retiro" value="si" required /> Sí</label>
+            <label class="check-linea"><input type="radio" name="sino_retiro" value="no" /> No</label>
+          </fieldset>
+          <label id="matr-motivo-retiro" hidden>Motivo del retiro
+            <select name="ficha_motivo_retiro">
+              <option value="">Escoja...</option>
+              ${MOTIVOS_RETIRO_FICHA.map(([n, t]) => `<option value="${n}">${n}. ${t}</option>`).join("")}
+            </select>
+          </label>
+          <fieldset class="matr-si-no">
+            <legend>¿Fue promovido(a)?</legend>
+            <label class="check-linea"><input type="radio" name="sino_promovido" value="si" required /> Sí</label>
+            <label class="check-linea"><input type="radio" name="sino_promovido" value="no" /> No</label>
+          </fieldset>
+          <fieldset class="matr-si-no">
+            <legend>¿Es repitente? (terminó y no obtuvo los logros)</legend>
+            <label class="check-linea"><input type="radio" name="sino_repitente" value="si" required /> Sí</label>
+            <label class="check-linea"><input type="radio" name="sino_repitente" value="no" /> No</label>
+          </fieldset>
         </div>
       </section>
 
@@ -174,11 +275,29 @@ function formularioNuevoEstudiante(documento, sedes) {
       </section>
 
       <section class="matr-seccion">
-        <h3>4. Acudiente</h3>
+        <h3>4. Acudiente y familia (para la ficha y el libro de registro)</h3>
         <div class="form-grid">
+          <fieldset class="matr-si-no">
+            <legend>¿Es huérfano(a)?</legend>
+            <label class="check-linea"><input type="radio" name="sino_huerfano" value="si" required /> Sí</label>
+            <label class="check-linea"><input type="radio" name="sino_huerfano" value="no" /> No</label>
+          </fieldset>
           <label>Nombre completo del acudiente <input type="text" name="ficha_acudiente" required /></label>
-          <label>Parentesco <input type="text" name="ficha_parentesco" required placeholder="Madre, padre, abuela..." /></label>
+          <label>Parentesco
+            <select name="parentesco_opcion" id="matr-parentesco" required>
+              <option value="">Escoja...</option>
+              ${PARENTESCOS_ACUDIENTE.map((p) => `<option value="${p}">${p}</option>`).join("")}
+            </select>
+          </label>
+          <label id="matr-parentesco-otro" hidden>¿Cuál parentesco? <input type="text" name="parentesco_otro" /></label>
           <label>Documento del acudiente <input type="text" name="ficha_documento_acudiente" required /></label>
+          <label id="matr-padres">Hijo(a) de (nombres de la madre y del padre) <input type="text" name="ficha_padres" required placeholder="Ej: María García y Edgar Beltrán" /></label>
+          <label>Teléfono <input type="tel" name="ficha_telefono" /></label>
+          <fieldset class="matr-si-no">
+            <legend>¿Necesita hospedaje en el albergue?</legend>
+            <label class="check-linea"><input type="radio" name="sino_albergue" value="si" required /> Sí</label>
+            <label class="check-linea"><input type="radio" name="sino_albergue" value="no" /> No</label>
+          </fieldset>
         </div>
       </section>
 
@@ -196,6 +315,24 @@ function formularioNuevoEstudiante(documento, sedes) {
   `;
 }
 
+// El año escogido se repite en el título de la sección y en el botón, para
+// que nunca quede la duda de para qué año se está matriculando.
+function actualizarAnioMatricula(form) {
+  const anio = form.anio_matricula.value;
+  const boton = form.querySelector('button[type="submit"]');
+  form.querySelector(".matr-anio-titulo").textContent = anio ? `· año escolar ${anio}` : "";
+  // Matrícula para este año: se pregunta el grado del año pasado; para el
+  // próximo año: el grado que cursa ahora. Es la casilla "GRADO AÑO <anterior>".
+  const actual = Number(fechaColombiaISO().slice(0, 4));
+  document.getElementById("matr-grado-anterior-texto").textContent = !anio
+    ? "¿En qué grado estuvo el año anterior?"
+    : Number(anio) > actual
+      ? `¿En qué grado está ahora, en ${actual}?`
+      : `¿En qué grado estuvo el año anterior (${Number(anio) - 1})?`;
+  document.getElementById("matr-anio-aviso").hidden = !!anio;
+  if (!boton.disabled) boton.textContent = anio ? `Matricular para ${anio} y abrir su ficha de matrícula` : "Matricular y abrir su ficha de matrícula";
+}
+
 // Cursos (secciones) que ya tiene ese grado en esa sede.
 async function actualizarCursosMatricula() {
   const sede = document.getElementById("matr-sede").value;
@@ -206,9 +343,9 @@ async function actualizarCursosMatricula() {
     const grados = await api(`/api/sedes/${sede}/grados`).catch(() => []);
     divisiones = grados.find((g) => g.grado === grado)?.divisiones || [];
   }
-  select.innerHTML = `<option value="">Sin curso (único grupo)</option>` +
+  // La sección es opcional: por defecto queda pendiente.
+  select.innerHTML = `<option value="">Pendiente (se asigna después)</option>` +
     divisiones.map((d) => `<option value="${d.numero}">${grado}-${d.numero} (${esc(d.nombre)})</option>`).join("");
-  if (divisiones.length) select.value = String(divisiones[0].numero);
 }
 
 // Lo del formulario → { estudiante, campos_ficha } con los nombres de casilla de la ficha oficial.
@@ -235,12 +372,21 @@ function datosMatriculaNueva(form) {
   Object.entries(d).forEach(([k, v]) => {
     if (k.startsWith("ficha_") && String(v).trim()) campos[k.slice(6)] = String(v).trim();
   });
+  campos.parentesco = d.parentesco_opcion === "Otro" ? (d.parentesco_otro || "").trim() : d.parentesco_opcion;
+  if (d.sino_huerfano === "si") delete campos.padres;
+  else if (["Madre", "Padre"].includes(d.parentesco_opcion)) campos.padres = (d.ficha_acudiente || "").trim();
   if (d.ficha_sgp) campos.sgp = "X";
   if (d.etnia) campos[d.etnia] = "X";
   SI_NO_FICHA.forEach(([clave]) => {
     if (d[`sino_${clave}`]) campos[`${clave}_${d[`sino_${clave}`]}`] = "X";
   });
   if (d.sino_discap) campos[`discap_${d.sino_discap}`] = "X";
+  if (d.sino_huerfano) campos[`huerfano_${d.sino_huerfano}`] = "X";
+  if (d.sino_retiro) campos[`retiro_${d.sino_retiro}`] = "X";
+  if (d.sino_promovido) campos[`promovido_${d.sino_promovido}`] = "X";
+  if (d.sino_repitente) campos[`repitente_${d.sino_repitente}`] = "X";
+  if (d.grado_anterior !== "") campos.grado_anterior = d.grado_anterior;
+  if (d.sino_albergue) campos[`albergue_${d.sino_albergue}`] = "X";
   if (d.sino_discap === "si") {
     DISCAPACIDADES_FICHA.forEach(([k]) => { if (d[k]) campos[k] = "X"; });
     if (d.disc_otras.trim()) campos.disc_otras = d.disc_otras.trim();
@@ -249,7 +395,7 @@ function datosMatriculaNueva(form) {
     const [anio, mes, dia] = d.fecha_ingreso.split("-");
     Object.assign(campos, { ingreso_dia: String(Number(dia)), ingreso_mes: MESES_FICHA[Number(mes) - 1], ingreso_anio: anio });
   }
-  return { estudiante, campos_ficha: campos };
+  return { estudiante, campos_ficha: campos, anio_matricula: Number(d.anio_matricula) };
 }
 
 async function guardarNuevoEstudiante(ev) {
@@ -267,12 +413,14 @@ async function guardarNuevoEstudiante(ev) {
     });
     // Directo a su ficha, en la pestaña Matrícula: la ficha oficial ya sale llena.
     fichaSubSiguiente = "matricula";
-    fichaAviso = { tipo: "exito", texto: `${nuevo.primer_nombre} ${nuevo.primer_apellido} quedó matriculado(a). Ya puede descargar o imprimir su ficha de matrícula.` };
+    fichaVisorSiguiente = true; // abre la ficha oficial de una vez; «Siguiente» lleva al libro
+    fichaAviso = { tipo: "exito", texto: `${nuevo.primer_nombre} ${nuevo.primer_apellido} quedó matriculado(a) para el año escolar ${nuevo.anio_ficha_matricula}. Imprima la ficha de matrícula y el libro de registro, y hágalos firmar.` };
     abrirFicha(nuevo.id, "agregar");
   } catch (err) {
     contenedor.querySelector("#matr-error")?.remove();
     form.insertAdjacentHTML("beforeend", `<div class="alerta-caja" id="matr-error">No se pudo guardar: ${esc(err.message)}</div>`);
     boton.disabled = false;
     boton.textContent = "Matricular y abrir su ficha de matrícula";
+    actualizarAnioMatricula(form);
   }
 }

@@ -3,7 +3,7 @@ import re
 import unicodedata
 from pathlib import Path
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, LargeBinary, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, LargeBinary, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from . import fechas
@@ -103,6 +103,9 @@ class Estudiante(Base):
     # quién lo matriculó (su sesión) y cuándo. Los importados del Excel
     # oficial no tienen nada de esto.
     pendiente_simat: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # Año escolar para el que se matriculó (Matrícula → nuevo). En octubre ya se
+    # matricula para el año siguiente, así que no se deduce de la fecha.
+    anio_matricula: Mapped[int | None] = mapped_column(Integer, nullable=True)
     creado_por_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
     creado_en: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     creado_por: Mapped["Usuario | None"] = relationship(foreign_keys=[creado_por_id])
@@ -116,18 +119,19 @@ class Estudiante(Base):
         """Recién matriculado aquí este año lectivo (y aún pendiente SIMAT):
         su ficha es la de ESTE año (Est. NUEVO), no la renovación del año
         siguiente que llevan los antiguos."""
-        return bool(
-            self.pendiente_simat
-            and self.creado_en
-            and fechas.hoy_colombia(instante=self.creado_en).year == fechas.anio_lectivo_actual()
-        )
+        if not (self.pendiente_simat and self.creado_en):
+            return False
+        anio = self.anio_matricula or fechas.hoy_colombia(instante=self.creado_en).year
+        return anio >= fechas.anio_lectivo_actual()
 
     @property
     def anio_ficha_matricula(self) -> int:
         """Año escolar de su ficha de matrícula: el actual para un estudiante
         nuevo de este año; el siguiente (renovación) para los demás."""
         actual = fechas.anio_lectivo_actual()
-        return actual if self.matricula_nueva_este_anio else actual + 1
+        if self.matricula_nueva_este_anio:
+            return self.anio_matricula or actual
+        return actual + 1
 
     sede_id: Mapped[int | None] = mapped_column(ForeignKey("sedes.id"), nullable=True)
     sede: Mapped[Sede | None] = relationship(back_populates="estudiantes")
@@ -1316,6 +1320,17 @@ class DatosFichaEstudiante(Base):
     acudiente_nombre: Mapped[str | None] = mapped_column(String(200), nullable=True)
     acudiente_parentesco: Mapped[str | None] = mapped_column(String(60), nullable=True)
     acudiente_documento: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Solo los pide el libro de registro de matrícula (no la ficha).
+    padres: Mapped[str | None] = mapped_column(String(250), nullable=True)  # "Hijo de: ..."
+    telefono: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    huerfano: Mapped[bool | None] = mapped_column(nullable=True)
+    necesita_albergue: Mapped[bool | None] = mapped_column(nullable=True)
+    # Situación académica (ficha): se pregunta al matricular un estudiante nuevo.
+    grado_anterior: Mapped[str | None] = mapped_column(String(20), nullable=True)  # grado del año anterior al de la ficha
+    retiro_anio_anterior: Mapped[bool | None] = mapped_column(nullable=True)
+    motivo_retiro: Mapped[str | None] = mapped_column(String(10), nullable=True)  # número de la tabla de la ficha
+    promovido: Mapped[bool | None] = mapped_column(nullable=True)
+    repitente: Mapped[bool | None] = mapped_column(nullable=True)
     actualizado_en: Mapped[dt.datetime] = mapped_column(DateTime, default=fechas.ahora_utc, onupdate=fechas.ahora_utc)
     actualizado_por_id: Mapped[int | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)
 

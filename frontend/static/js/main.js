@@ -30,7 +30,7 @@ function iniciarNavegacion() {
     document.querySelector(`[data-vista="${vistaActual === "ficha" ? "estudiantes" : vistaActual}"]`)?.classList.add("activo");
   })();
 
-  // vistaActual arranca en "sedes" por defecto (o en lo que traiga la URL)
+  // vistaActual arranca en "estudiantes" por defecto (o en lo que traiga la URL)
   // para TODOS, sin mirar el rol — ocultar el botón del menú no basta si la
   // vista igual se renderiza sola al entrar. Si la vista actual no es una de
   // las que el usuario puede ver, se cae a su primera pestaña permitida.

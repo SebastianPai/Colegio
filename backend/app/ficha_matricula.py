@@ -214,6 +214,11 @@ def generar_ficha_matricula(
     f4[1][3].text = ""  # Nombres y apellidos del acudiente: no se rastrea
     if len(f4[3]) > 4:
         f4[3][4].text = ""  # No. Documento del acudiente
+    # Renglón de las firmas: en la plantilla quedaba tan bajo que la firma del
+    # acudiente no cabía.
+    from docx.enum.table import WD_ROW_HEIGHT_RULE
+    from docx.shared import Inches
+    t4.rows[2].height, t4.rows[2].height_rule = Inches(0.6), WD_ROW_HEIGHT_RULE.AT_LEAST
     f4[4][1].text = docente or ""  # quien tiene la sesión abierta
     f4[5][2].text = str(fecha_dilig.day)
     f4[5][4].text = MESES_TEXTO.get(fecha_dilig.month, "")

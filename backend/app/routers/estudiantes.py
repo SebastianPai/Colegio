@@ -34,6 +34,7 @@ def listar_estudiantes_paginado(
     q: str | None = None,
     solo_no_verificados: bool = False,
     sin_curso: bool = False,
+    pendiente_simat: bool = False,
     pagina: int = 1,
     por_pagina: int = 50,
     _obs=Depends(rbac.observar("estudiantes.ver")),
@@ -48,6 +49,7 @@ def listar_estudiantes_paginado(
         busqueda=q,
         solo_no_verificados=solo_no_verificados,
         sin_curso=sin_curso,
+        pendiente_simat=pendiente_simat,
         pagina=max(pagina, 1),
         por_pagina=por_pagina,
     )
@@ -117,7 +119,11 @@ def matricular_estudiante_nuevo(
     if datos.sede_id is None or db.get(models.Sede, datos.sede_id) is None:
         raise HTTPException(status_code=400, detail="Escoja la sede del estudiante.")
     nuevo = models.Estudiante(**{**datos.model_dump(), "documento": datos.documento.strip()})
+    actual = fechas.anio_lectivo_actual()
+    if solicitud.anio_matricula not in (actual, actual + 1):
+        raise HTTPException(status_code=400, detail=f"El año de la matrícula debe ser {actual} o {actual + 1}.")
     nuevo.pendiente_simat = True
+    nuevo.anio_matricula = solicitud.anio_matricula
     nuevo.creado_por_id = identidad.usuario.id
     nuevo.creado_en = fechas.ahora_utc()
     db.add(nuevo)
@@ -235,11 +241,23 @@ def actualizar_estudiante(
 
 @router.delete("/{estudiante_id}", status_code=204)
 def eliminar_estudiante(
-    estudiante_id: int, _obs=Depends(rbac.observar("estudiantes.eliminar")), db: Session = Depends(get_db)
+    estudiante_id: int,
+    _identidad: auth.Identidad = Depends(rbac.requiere("estudiantes.eliminar")),
+    db: Session = Depends(get_db),
 ):
+    """Borrar no tiene vuelta atrás: exige sesión con el permiso (no solo
+    observar). Los archivos de fotos/documentos se quitan del disco solo si
+    la base aceptó el borrado."""
+    from .fotos import CARPETA_SUBIDAS, nombre_miniatura
+
+    estudiante = crud.obtener_estudiante(db, estudiante_id)
+    archivos = [f.nombre_archivo for f in estudiante.fotos] if estudiante else []
     try:
         eliminado = crud.eliminar_estudiante(db, estudiante_id)
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
     if not eliminado:
         raise HTTPException(status_code=404, detail="Estudiante no encontrado")
+    for nombre in archivos:
+        (CARPETA_SUBIDAS / nombre).unlink(missing_ok=True)
+        (CARPETA_SUBIDAS / nombre_miniatura(nombre)).unlink(missing_ok=True)

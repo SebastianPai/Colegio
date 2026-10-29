@@ -79,7 +79,8 @@ function previsualizarConstancia(e, nombreCompleto, datos) {
   `;
 }
 
-// --- Paz y salvo de servicio social (grado 11) -------------------------------
+// --- Paz y salvo de servicio social (grados 10 y 11) -------------------------
+const GRADOS_PAZ_Y_SALVO = [10, 11];
 // Mismo texto que backend/plantillas/paz_y_salvo_servicio_social.docx (ver
 // certificados._llenar_paz_y_salvo): solo cambian nombre, documento, lugar
 // de expedición y fecha.
@@ -129,11 +130,11 @@ function previsualizarPazYSalvo(e, nombreCompleto, datos) {
 }
 
 function panelPazYSalvoHtml(e, hoy) {
-  if (e.grado !== 11) return "";
+  if (!GRADOS_PAZ_Y_SALVO.includes(e.grado)) return "";
   return `
     <section class="est-bloque est-bloque-ancho">
       <header class="est-bloque-head">
-        <h3>Paz y salvo de servicio social (grado 11)</h3>
+        <h3>Paz y salvo de servicio social (grado ${e.grado})</h3>
         <p class="est-bloque-desc">Certifica las 80 horas de servicio social obligatorio. Queda guardado en el registro de constancias.</p>
       </header>
       <div class="constancia-editor">
@@ -471,7 +472,7 @@ async function guardarDatosFicha(e) {
 async function cargarHojaFicha(e) {
   const cont = document.getElementById("ficha-contenedor");
   if (!cont) return;
-  const res = await fetch("/static/ficha_matricula.html?v=f61");
+  const res = await fetch("/static/ficha_matricula.html?v=f62");
   // La hoja trae escrita la renovación 2026 → 2027; solo cambian los rótulos
   // de año, según para qué año es la ficha de este estudiante.
   const anio = e.anio_ficha_matricula || new Date().getFullYear() + 1;
@@ -491,6 +492,11 @@ async function cargarHojaFicha(e) {
     cont.querySelectorAll("input").forEach((i) => {
       if (guardado.campos[i.name] !== undefined) i.value = guardado.campos[i.name];
     });
+    // Nuevo: el grado que dijo tener el año anterior (formulario de matrícula).
+    const gradoAnterior = cont.querySelector('input[name="grado_2025"]');
+    if (e.matricula_nueva_este_anio && guardado.campos.grado_anterior && gradoAnterior && !gradoAnterior.value) {
+      gradoAnterior.value = guardado.campos.grado_anterior;
+    }
   } catch {
     /* sin permiso o sin datos guardados: se queda con los valores por defecto */
   }
@@ -721,6 +727,7 @@ let fichaDocAccionPendiente = null; // { modo: "escanear"|"reemplazar", categori
 let fichaDocSeleccionId;             // undefined = automático (primero cargado), null = vista previa cerrada
 let fichaDocZoom = 100;              // % de ancho de la imagen en la vista previa
 let fichaNombreActual = "";          // para la cola sin conexión (sin_conexion.js)
+let fichaVisorSiguiente = false;   // abrir la ficha oficial apenas cargue (después de matricular)
 let fichaSubSiguiente = null;        // pestaña con la que abrir la próxima ficha (ej. desde «Usar sin wifi»)
 
 const SUBVISTAS_FICHA = [
@@ -731,7 +738,7 @@ const SUBVISTAS_FICHA = [
   { id: "constancias", nombre: "Constancias", icono: "badge-check" },
 ];
 // Qué documento se está generando en la pestaña Constancias: "estudio"
-// (constancia de estudio) o "pazysalvo" (solo grado 11). Vuelve a "estudio"
+// (constancia de estudio) o "pazysalvo" (solo grados 10 y 11). Vuelve a "estudio"
 // al abrir otro estudiante.
 let fichaTipoConstancia = "estudio";
 let fichaSub = "resumen";        // pestaña activa; se conserva entre renders
@@ -1310,6 +1317,7 @@ function panelResumenHtml(e, docs) {
             <button type="button" class="boton secundario est-boton-ancho" data-ir-sub="constancias"><i data-lucide=file-text class=ico></i> Generar constancia</button>
             <button type="button" class="boton secundario est-boton-ancho" data-ficha-accion="word"><i data-lucide=download class=ico></i> Ficha en Word</button>
             <button type="button" class="boton secundario est-boton-ancho" data-ficha-accion="imprimir"><i data-lucide=printer class=ico></i> Imprimir ficha</button>
+            <button type="button" class="boton secundario est-boton-ancho" data-libro-abrir><i data-lucide=book-open class=ico></i> Libro de registro</button>
           </div>
           <div data-resultado-ficha></div>
         </section>
@@ -1465,8 +1473,9 @@ function panelMatriculaHtml(e, nombreCompleto) {
         <section class="est-documento-oficial">
           <div class="est-documento-icono"><i data-lucide=clipboard-list class=ico></i> </div>
           <div class="est-documento-info">
-            <h3>Ficha de matrícula</h3>
-            <p class="est-documento-sub">Formato oficial de la institución · ${esc(nombreCompleto)}</p>
+            <h3>Ficha de matrícula · año escolar ${e.anio_ficha_matricula || new Date().getFullYear() + 1}</h3>
+            <p class="est-documento-sub">Formato oficial de la institución · ${esc(nombreCompleto)} ·
+              ${e.matricula_nueva_este_anio ? "estudiante NUEVO" : "renovación (estudiante antiguo)"}</p>
             <p class="est-bloque-desc">
               Es el documento oficial y no se puede modificar su formato. Al abrirlo se escribe directamente
               sobre las casillas; revisa especialmente el <strong>Grado año ${e.matricula_nueva_este_anio ? e.anio_ficha_matricula : (e.anio_ficha_matricula || new Date().getFullYear() + 1) - 1}</strong> (número, Preescolar = 0).
@@ -1480,6 +1489,19 @@ function panelMatriculaHtml(e, nombreCompleto) {
               <button type="button" class="boton secundario" data-ficha-accion="imprimir">Imprimir</button>
             </div>
             <div data-resultado-ficha></div>
+          </div>
+        </section>
+        <section class="est-documento-oficial">
+          <div class="est-documento-icono"><i data-lucide=book-open class=ico></i> </div>
+          <div class="est-documento-info">
+            <h3>Libro de registro de matrícula · año escolar ${e.anio_ficha_matricula || new Date().getFullYear() + 1}</h3>
+            <p class="est-documento-sub">Segunda hoja · la firman el estudiante, el acudiente y el responsable de la matrícula</p>
+            ${e.matricula_nueva_este_anio
+              ? '<p class="alerta-caja">Estudiante nuevo: imprima esta hoja junto con la ficha y hágala firmar.</p>'
+              : '<p class="est-bloque-desc">Obligatoria para estudiantes nuevos; también se puede imprimir para un antiguo.</p>'}
+            <div class="est-documento-acciones">
+              <button type="button" class="boton" data-libro-abrir>Abrir libro de registro</button>
+            </div>
           </div>
         </section>
       </div>
@@ -1504,7 +1526,7 @@ function panelMatriculaHtml(e, nombreCompleto) {
 // Pestaña Constancias: arriba se escoge el documento, debajo su formulario
 // con vista previa, y al final todo lo que se le ha generado al estudiante.
 function panelDocumentosConstanciaHtml(e, opciones, hoy) {
-  const conPazYSalvo = e.grado === 11;
+  const conPazYSalvo = GRADOS_PAZ_Y_SALVO.includes(e.grado);
   if (!conPazYSalvo) fichaTipoConstancia = "estudio";
   const opcion = (valor, texto, ayuda) => `
     <label class="constancia-tipo ${fichaTipoConstancia === valor ? "activo" : ""}">
@@ -1517,7 +1539,7 @@ function panelDocumentosConstanciaHtml(e, opciones, hoy) {
       <div class="constancia-tipos">
         ${opcion("estudio", "Constancia de estudio", "Certifica que está matriculado (libreta militar, ICBF, banco...)")}
         ${conPazYSalvo
-          ? opcion("pazysalvo", "Paz y salvo de servicio social", "Las 80 horas de servicio social, para el grado (solo grado 11)")
+          ? opcion("pazysalvo", "Paz y salvo de servicio social", "Las 80 horas de servicio social, para el grado (solo grados 10 y 11)")
           : ""}
       </div>
     </section>
@@ -1625,6 +1647,7 @@ function visorFichaHtml(e, nombreCompleto) {
           <button type="button" class="boton secundario" data-ficha-accion="word">Word</button>
           <button type="button" class="boton secundario" data-ficha-accion="pdf">PDF</button>
           <button type="button" class="boton secundario" data-ficha-accion="imprimir">Imprimir</button>
+          <button type="button" class="boton" data-ficha-accion="siguiente">Siguiente: libro de matrícula →</button>
           <button type="button" class="est-visor-cerrar" id="btn-cerrar-visor" aria-label="Cerrar"></button>
         </div>
       </header>
@@ -1770,6 +1793,10 @@ async function renderFicha() {
     fichaSub = fichaSubSiguiente;
     fichaSubSiguiente = null;
   }
+  if (fichaVisorSiguiente) {
+    fichaVisorAbierto = true;
+    fichaVisorSiguiente = false;
+  }
 
   // Documentos tomados sin conexión que esperan en el celular: se muestran
   // como si ya estuvieran (con su aviso), y el que reemplazan se oculta.
@@ -1827,7 +1854,7 @@ async function renderFicha() {
         </div>
         <div class="est-cabecera-acciones">
           ${fichaModoDocente ? "" : '<button type="button" class="boton secundario" data-ir-sub="constancias" data-tipo-constancia="estudio"><i data-lucide=file-text class=ico></i> Generar constancia</button>'}
-          ${fichaModoDocente || e.grado !== 11 ? "" : '<button type="button" class="boton secundario" data-ir-sub="constancias" data-tipo-constancia="pazysalvo"><i data-lucide=graduation-cap class=ico></i> Paz y salvo</button>'}
+          ${fichaModoDocente || !GRADOS_PAZ_Y_SALVO.includes(e.grado) ? "" : '<button type="button" class="boton secundario" data-ir-sub="constancias" data-tipo-constancia="pazysalvo"><i data-lucide=graduation-cap class=ico></i> Paz y salvo</button>'}
           <button type="button" class="boton" data-ficha-accion="abrir"><i data-lucide=folder-open class=ico></i> Ver ficha completa</button>
         </div>
       </header>
@@ -2385,9 +2412,17 @@ async function renderFicha() {
       else if (accion === "pdf") descargarFicha("pdf");
       else if (accion === "word") descargarFicha("docx");
       else if (accion === "guardar") guardarFichaEnEstudiante();
+      else if (accion === "siguiente") {
+        // Lo escrito en la ficha se guarda antes, así el libro sale con eso.
+        try { await guardarDatosFicha(e); } catch { /* el libro abre igual con lo que haya */ }
+        abrirLibroMatricula(e, nombreCompleto);
+      }
     });
   });
 
+  document.querySelectorAll("[data-libro-abrir]").forEach((btn) =>
+    btn.addEventListener("click", () => abrirLibroMatricula(e, nombreCompleto))
+  );
   vincularPazYSalvoFicha(e, nombreCompleto);
   vincularPendienteSimat(e);
   pintarHistorialConstancias(fichaEstudianteId);

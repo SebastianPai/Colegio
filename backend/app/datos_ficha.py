@@ -19,13 +19,23 @@ TEXTOS = {  # campo de la ficha -> columna
     "municipio_nacimiento": "municipio_nacimiento", "resguardo": "resguardo", "procedencia": "procedencia",
     "direccion": "direccion", "horas": "traslado_horas", "minutos": "traslado_minutos",
     "acudiente": "acudiente_nombre", "parentesco": "acudiente_parentesco", "documento_acudiente": "acudiente_documento",
+    "motivo_retiro": "motivo_retiro",
 }
 SI_NO = {  # columna -> (casilla Si, casilla No)
     "habla_awapit": ("awapit_si", "awapit_no"), "madre_cabeza": ("madre_si", "madre_no"),
     "educacion_especial": ("educ_esp_si", "educ_esp_no"), "desplazamiento": ("desplaz_si", "desplaz_no"),
     "cruza_rios": ("rios_si", "rios_no"), "cruza_quebradas": ("quebradas_si", "quebradas_no"),
+    "retiro_anio_anterior": ("retiro_si", "retiro_no"), "promovido": ("promovido_si", "promovido_no"),
+    "repitente": ("repitente_si", "repitente_no"),
 }
 ETNIAS = {"etnia_indigena": "INDIGENA", "etnia_afro": "AFRO", "etnia_mestizo": "MESTIZO"}
+# Lo que solo trae el libro de registro de matrícula: se actualiza únicamente
+# si la casilla viene en el formulario (guardar la ficha, que no las tiene, no
+# las borra).
+# El grado anterior entra igual: solo lo trae el formulario de matrícula nueva
+# (en la ficha va en "GRADO AÑO <anterior>", que para los antiguos es otro dato).
+TEXTOS_LIBRO = {"padres": "padres", "telefono": "telefono", "grado_anterior": "grado_anterior"}
+SI_NO_LIBRO = {"huerfano": ("huerfano_si", "huerfano_no"), "necesita_albergue": ("albergue_si", "albergue_no")}
 
 
 def _marcada(v) -> bool:
@@ -61,6 +71,12 @@ def campos_a_datos(campos: dict[str, str], fila: models.DatosFichaEstudiante) ->
              for k in DISCAPACIDAD_CAMPOS if k in detalle]
     fila.discapacidad_detalle = json.dumps(detalle, ensure_ascii=False) if detalle else None
     fila.discapacidad = "; ".join(tipos) if tipos or "discap_si" in detalle else ("NINGUNA" if "discap_no" in detalle else None)
+    for campo, col in TEXTOS_LIBRO.items():
+        if campo in campos:
+            setattr(fila, col, _limpio(campos[campo]))
+    for col, (si, no) in SI_NO_LIBRO.items():
+        if si in campos or no in campos:
+            setattr(fila, col, True if _marcada(campos.get(si)) else False if _marcada(campos.get(no)) else None)
 
 
 def datos_a_campos(fila: models.DatosFichaEstudiante | None, estudiante: models.Estudiante) -> dict[str, str]:
@@ -79,6 +95,13 @@ def datos_a_campos(fila: models.DatosFichaEstudiante | None, estudiante: models.
             campos[si] = "X"
         elif v is False:
             campos[no] = "X"
+    for campo, col in TEXTOS_LIBRO.items():
+        if getattr(fila, col):
+            campos[campo] = getattr(fila, col)
+    for col, (si, no) in SI_NO_LIBRO.items():
+        v = getattr(fila, col)
+        if v is not None:
+            campos[si if v else no] = "X"
     for k, v in ETNIAS.items():
         if fila.etnia == v:
             campos[k] = "X"

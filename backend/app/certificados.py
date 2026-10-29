@@ -165,7 +165,7 @@ def generar_constancia(
     return buffer.getvalue()
 
 
-# --- Paz y salvo de servicio social (grado 11) -------------------------------
+# --- Paz y salvo de servicio social (grados 10 y 11) -------------------------
 # Plantilla: plantillas/paz_y_salvo_servicio_social.docx, copia del Word
 # oficial "PAZ Y SALVO 2026" (certifica las 80 horas de servicio social
 # obligatorio, requisito para el título de bachiller). Igual que la

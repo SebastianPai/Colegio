@@ -225,8 +225,9 @@ ROLES_SISTEMA: list[DefinicionRol] = [
             "alertas.ver", "alertas.atender",
             "diagnosticos.ver", "diagnosticos.vincular", "diagnosticos.observar", "diagnosticos.exportar",
             # Pedido del colegio (14/10/2026): el orientador consulta horarios
-            # (dónde está un grupo/docente a cada hora). Solo consulta.
-            "horario.ver",
+            # (dónde está un grupo/docente a cada hora). Solo consulta. La
+            # pantalla de horarios necesita la lista de docentes (28/10/2026).
+            "horario.ver", "docentes.ver",
         ],
     ),
     DefinicionRol(

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 
-from .. import certificados, crud, ficha_matricula, models, promocion, rbac, schemas
+from .. import certificados, crud, ficha_matricula, libro_matricula, models, promocion, rbac, schemas
 from ..database import get_db
 
 router = APIRouter(prefix="/api/certificados", tags=["certificados"])
@@ -24,7 +24,7 @@ def opciones_certificado(_obs=Depends(rbac.observar("constancias.ver"))):
         "tipos_documento": list(certificados.TIPOS_DOCUMENTO_TEXTO.keys()),
         "propositos": certificados.PROPOSITOS,
         # Para filtrar el registro: además de los de la constancia de estudio,
-        # el paz y salvo de grado 11 (que no es un "Válido para...").
+        # el paz y salvo de grado 10 y 11 (que no es un "Válido para...").
         "propositos_registro": certificados.PROPOSITOS + [certificados.PROPOSITO_PAZ_Y_SALVO],
     }
 
@@ -41,6 +41,42 @@ def listar_constancias(
 ):
     return crud.listar_constancias(
         db, busqueda=q, desde=desde, hasta=hasta, proposito=proposito, estudiante_id=estudiante_id
+    )
+
+
+@router.post("/libro-matricula")
+def generar_libro_matricula_endpoint(
+    solicitud: schemas.FichaMatriculaSolicitud,
+    _obs=Depends(rbac.observar("estudiantes.ver")),
+    db: Session = Depends(get_db),
+):
+    """Hoja del libro de registro de matrículas sobre el Word oficial (ver
+    app/libro_matricula.py), con lo que quedó escrito en la hoja en pantalla."""
+    estudiante = crud.obtener_estudiante(db, solicitud.estudiante_id)
+    if estudiante is None:
+        raise HTTPException(status_code=404, detail="Estudiante no encontrado")
+    contenido = libro_matricula.generar_libro_matricula(solicitud.campos)
+    media = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    extension = "docx"
+    if solicitud.formato == "pdf":
+        carpeta = Path(tempfile.mkdtemp(prefix="libro_pdf_"))
+        try:
+            ruta_docx, ruta_pdf = carpeta / "libro.docx", carpeta / "libro.pdf"
+            ruta_docx.write_bytes(contenido)
+            if not certificados.convertir_a_pdf(ruta_docx, ruta_pdf):
+                raise HTTPException(
+                    status_code=503,
+                    detail="No se pudo convertir a PDF (Word no respondió). Descarga el Word o usa Imprimir y elige «Guardar como PDF».",
+                )
+            contenido = ruta_pdf.read_bytes()
+        finally:
+            shutil.rmtree(carpeta, ignore_errors=True)
+        media, extension = "application/pdf", "pdf"
+    nombre_descarga = f"Libro matricula - {estudiante.nombre_completo}.{extension}"
+    return Response(
+        content=contenido,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{nombre_descarga}"'},
     )
 
 
@@ -136,11 +172,11 @@ def _grado_destino(campos: dict) -> int | None:
 
 
 #
-# --- Paz y salvo de servicio social (grado 11) --------------------------------
+# --- Paz y salvo de servicio social (grados 10 y 11) --------------------------
 # Van ANTES de /{constancia_id}/archivo para que "paz-y-salvo" nunca se lea
 # como un id de constancia.
 
-GRADO_PAZ_Y_SALVO = 11
+GRADOS_PAZ_Y_SALVO = (10, 11)
 _NOMBRE_ARCHIVO_PYS = re.compile(r"^paz_y_salvo_[0-9a-f]{32}$")
 
 
@@ -160,15 +196,16 @@ def estudiantes_paz_y_salvo(
     _obs=Depends(rbac.observar("constancias.ver")),
     db: Session = Depends(get_db),
 ):
-    """Estudiantes activos de grado 11 (los que necesitan el paz y salvo de
-    servicio social para graduarse)."""
+    """Estudiantes activos de grado 10 y 11 (los que necesitan el paz y salvo
+    de servicio social)."""
     return [
         schemas.PazYSalvoEstudiante(
             id=e.id, nombre_completo=e.nombre_completo, documento=e.documento, tipo_documento=e.tipo_documento,
             lugar_expedicion=e.lugar_expedicion_documento, genero=e.genero,
-            sede_id=e.sede_id, sede_nombre=e.sede.nombre if e.sede else "", grupo=e.grupo,
+            sede_id=e.sede_id, sede_nombre=e.sede.nombre if e.sede else "", grupo=e.grupo, grado=e.grado,
         )
-        for e in crud.listar_estudiantes(db, sede_id=sede_id, grado=GRADO_PAZ_Y_SALVO, estado="ACTIVO")
+        for grado in GRADOS_PAZ_Y_SALVO
+        for e in crud.listar_estudiantes(db, sede_id=sede_id, grado=grado, estado="ACTIVO")
     ]
 
 
@@ -188,8 +225,8 @@ def generar_paz_y_salvo(
         e = crud.obtener_estudiante(db, estudiante_id)
         if e is None:
             raise HTTPException(status_code=404, detail=f"No existe el estudiante #{estudiante_id}.")
-        if e.grado != GRADO_PAZ_Y_SALVO:
-            raise HTTPException(status_code=400, detail=f"{e.nombre_completo} no está en grado 11.")
+        if e.grado not in GRADOS_PAZ_Y_SALVO:
+            raise HTTPException(status_code=400, detail=f"{e.nombre_completo} no está en grado 10 u 11.")
         estudiantes.append(e)
     lugares = {
         e.id: (solicitud.lugares.get(e.id) or e.lugar_expedicion_documento or "").strip() for e in estudiantes
@@ -230,8 +267,8 @@ def generar_paz_y_salvo_estudiante(
     e = crud.obtener_estudiante(db, solicitud.estudiante_id)
     if e is None:
         raise HTTPException(status_code=404, detail="Ese estudiante no existe en la base de datos.")
-    if e.grado != GRADO_PAZ_Y_SALVO:
-        raise HTTPException(status_code=400, detail="El paz y salvo de servicio social es para estudiantes de grado 11.")
+    if e.grado not in GRADOS_PAZ_Y_SALVO:
+        raise HTTPException(status_code=400, detail="El paz y salvo de servicio social es para estudiantes de grado 10 y 11.")
     lugar = (solicitud.lugar_expedicion or e.lugar_expedicion_documento or "").strip()
     datos = _dict_paz_y_salvo(e, lugar)
     if solicitud.tipo_documento:
@@ -265,7 +302,7 @@ def descargar_paz_y_salvo(
     ruta = CARPETA_CONSTANCIAS / f"{archivo}.{formato}"
     if not ruta.exists():
         raise HTTPException(status_code=404, detail="Ese archivo ya no está en el disco")
-    return FileResponse(ruta, filename=f"Paz y salvo servicio social grado 11.{formato}")
+    return FileResponse(ruta, filename=f"Paz y salvo servicio social.{formato}")
 
 
 @router.get("/{constancia_id}/archivo")

@@ -197,7 +197,10 @@ function _aplicarVisibilidadPorPermisos(permisos) {
     // enlace (p. ej. el Administrador, que tiene todos los permisos) solo
     // daría "Tu usuario no está vinculado a un docente".
     const sinDocente = "requiereDocente" in el.dataset && !sesionActual?.usuario?.docente_id;
-    el.hidden = !lista.includes(el.dataset.permiso) || moduloApagado || sinDocente;
+    // Horarios repetido dentro de "Orientación": solo para quien consulta
+    // (orientación); quien lo gestiona ya lo tiene en "Gestión".
+    const soloOrientacion = "soloOrientacion" in el.dataset && lista.includes("horario.gestionar");
+    el.hidden = !lista.includes(el.dataset.permiso) || moduloApagado || sinDocente || soloOrientacion;
   });
   // Un grupo del menú (ej. "Gestión") sin NINGÚN botón visible (ni siquiera
   // un "Próximamente") se oculta completo, para no dejar un título suelto

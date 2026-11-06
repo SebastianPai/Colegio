@@ -49,8 +49,10 @@ def _limpio(v) -> str | None:
 
 def _fecha(dia, mes, anio) -> dt.date | None:
     try:
-        m = str(mes).strip().upper()
-        mes_n = MESES.index(m) + 1 if m in MESES else int(m)
+        m = str(mes).strip().upper().rstrip(".")
+        # Mes completo ("NOVIEMBRE"), abreviado ("NOV") o en número ("11").
+        abreviado = [x[:3] for x in MESES]
+        mes_n = MESES.index(m) + 1 if m in MESES else abreviado.index(m[:3]) + 1 if m[:3] in abreviado else int(m)
         return dt.date(int(str(anio).strip()), mes_n, int(str(dia).strip()))
     except (ValueError, TypeError):
         return None
@@ -109,7 +111,8 @@ def datos_a_campos(fila: models.DatosFichaEstudiante | None, estudiante: models.
         campos["sgp"] = "X"
     if fila.fecha_ingreso:
         campos["ingreso_dia"] = str(fila.fecha_ingreso.day)
-        campos["ingreso_mes"] = MESES[fila.fecha_ingreso.month - 1]
+        # Abreviado (NOV): el mes completo no cabe en la casilla de la ficha.
+        campos["ingreso_mes"] = MESES[fila.fecha_ingreso.month - 1][:3]
         campos["ingreso_anio"] = str(fila.fecha_ingreso.year)
     if fila.discapacidad_detalle:
         campos.update(json.loads(fila.discapacidad_detalle))

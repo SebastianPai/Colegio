@@ -14,7 +14,7 @@
 //
 // Solo funciona por HTTPS (iniciar_https.ps1) o en localhost.
 
-const VERSION_APP = "app-v20";
+const VERSION_APP = "app-v32";
 const CACHE_APP = `ietaba-${VERSION_APP}`;
 const CACHE_DATOS = "ietaba-datos";
 const CACHE_DOCUMENTOS = "ietaba-documentos";

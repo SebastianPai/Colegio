@@ -1,3 +1,5 @@
+import datetime as dt
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -122,6 +124,20 @@ def matricular_estudiante_nuevo(
     actual = fechas.anio_lectivo_actual()
     if solicitud.anio_matricula not in (actual, actual + 1):
         raise HTTPException(status_code=400, detail=f"El año de la matrícula debe ser {actual} o {actual + 1}.")
+    # Edad mínima: 5 años cumplidos a más tardar el 30 de junio del año escolar.
+    nac = datos.fecha_nacimiento
+    if nac:
+        try:
+            cumple5 = nac.replace(year=nac.year + 5)
+        except ValueError:  # 29 de febrero
+            cumple5 = dt.date(nac.year + 5, 3, 1)
+        limite = dt.date(solicitud.anio_matricula, 6, 30)
+        if cumple5 > limite:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Muy pequeño(a): cumple 5 años el {cumple5:%d/%m/%Y} y para {solicitud.anio_matricula} "
+                f"debe cumplirlos a más tardar el 30/06/{solicitud.anio_matricula}.",
+            )
     nuevo.pendiente_simat = True
     nuevo.anio_matricula = solicitud.anio_matricula
     nuevo.creado_por_id = identidad.usuario.id

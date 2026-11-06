@@ -105,7 +105,7 @@ try:
     verificar("discapacidad vuelve con su detalle",
               g.get("discap_si") == "X" and g.get("disc_ceguera") == "X" and g.get("disc_otras") == "Asma")
     verificar("fecha de ingreso vuelve",
-              (g.get("ingreso_dia"), g.get("ingreso_mes"), g.get("ingreso_anio")) == ("23", "OCTUBRE", "2025"), g)
+              (g.get("ingreso_dia"), g.get("ingreso_mes"), g.get("ingreso_anio")) == ("23", "OCT", "2025"), g)  # abreviado: el mes completo no cabe
     verificar("nombres y grado NO se guardan desde la ficha", "nombres" not in g and "grado_2026" not in g)
     est_json = json.loads(c.pedir(f"/api/estudiantes/{EST}")[1])
     verificar("el lugar de expedición actualiza al estudiante", est_json.get("lugar_expedicion_documento") == "TUMACO",

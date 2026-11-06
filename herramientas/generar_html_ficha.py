@@ -92,15 +92,15 @@ except Exception:
 css = """<style>
 .fh{--z:1.3;width:calc(680px*var(--z));max-width:none;background:#fff;color:#111;font-family:Cambria,Georgia,serif;font-size:calc(9px*var(--z));padding:calc(10px*var(--z))}
 .fh-enc{display:flex;align-items:center;gap:8px;text-align:center;font-family:'Arial Narrow',Arial,sans-serif;font-weight:700;line-height:1.25}
-.fh-enc img{width:calc(48px*var(--z));height:calc(48px*var(--z));object-fit:contain}
+.fh-enc img{width:calc(48px*var(--z));height:calc(48px*var(--z));object-fit:contain}.fh-enc::after{content:"";width:calc(48px*var(--z));flex:none}
 .fh-enc div{flex:1}.fh-enc .g{font-size:1.25em}
 .fh-t{width:100%;border-collapse:collapse;table-layout:fixed;margin:calc(6px*var(--z)) 0}
 .fh-t td{border:.75px solid #000;padding:1px 3px;vertical-align:middle;overflow:hidden;line-height:1.15;height:1.9em}
-.fh-t td.fh-v{padding:0;background:#fff}
+.fh-t td{text-align:center}.fh-t td.fh-v{padding:0;background:#fff;text-align:left}
 .fh-t input{display:block;box-sizing:border-box;width:100%;height:100%;min-height:1.9em;border:0;outline:0;background:transparent;font:700 1em Cambria,Georgia,serif;padding:0 3px;color:#0b2a7a}
 .fh-t input:hover{background:rgba(255,255,170,.5)}.fh-t input:focus{background:rgba(255,255,140,.9);outline:1px dashed #777}
 .fh-pie{text-align:justify;font-size:.95em;line-height:1.25;margin-top:6px}
-@media print{@page{margin:8mm}.fh{width:100%!important;font-size:8.5pt!important;padding:0}.fh-t input{color:#000}}
+@media print{@page{size:letter;margin:6mm}html,body{-webkit-print-color-adjust:exact;print-color-adjust:exact}.fh{--z:1.3!important;zoom:.87;padding:0;margin:0 auto}.fh-t input{color:#000}}
 </style>"""
 enc = ('<div class="fh-enc"><img src="/static/logos/logo2.jpeg" alt=""><div><div class="g">INSTITUCION EDUCATIVA INDIGENA TECNICA AGROAMBIENTAL BILINGÜE AWA – IETABA</div>'
        '<div class="g">SEDE # 01 INSTITUCIÓN IETABA - CODIGO DANE 252079002045</div><div>MUNICIPIO DE BARBACOAS - 2027</div>'

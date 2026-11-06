@@ -16,31 +16,32 @@ const LIBRO_MARCAS = new Set(["desplaz_si", "desplaz_no", "huerfano_si", "huerfa
 // muestra ya armadas, ej. "lugar y fecha de nacimiento" o la dirección =
 // resguardo + comunidad; esas se corrigen en la ficha).
 const LIBRO_SOLO_HOJA = new Set(["nombre", "nacimiento", "documento", "direccion", "municipio_expedicion", "grado", "anio", "est_antiguo", "est_nuevo",
-  "dilig_dia", "dilig_mes", "dilig_anio", "lugar", "firma_nombre_est", "responsable"]);
+  "dilig_dia", "dilig_mes", "dilig_anio", "firma_nombre_est", "responsable"]);
 
 // La hoja en pantalla copia el Word oficial (plantillas/libro_matricula.docx):
 // mismo membrete, renglones con el dato subrayado, firmas y pie de página.
 // Lo que se descarga en Word/PDF sale de esa plantilla (app/libro_matricula.py).
 const LIBRO_ESTILO = `<style>
 .lb{--z:1.3;zoom:var(--z);width:640px;max-width:none;margin:0 auto;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;font-size:10.5px;padding:34px 46px 22px;box-sizing:border-box;box-shadow:0 2px 12px rgba(0,0,0,.12)}
-.lb-enc{display:flex;align-items:center;gap:10px}
-.lb-enc img{width:72px;height:72px;object-fit:contain}
-.lb-enc div{flex:1;text-align:center;line-height:1.25;font-size:8px;color:#555}
-.lb-enc b{display:block;font-size:8.5px;color:#555}.lb-enc em{display:block;font-family:"Brush Script MT",cursive;font-size:12px;text-decoration:underline}
-.lb h2{text-align:center;font-size:14px;font-weight:400;margin:28px 0 0}.lb h3{text-align:center;font-size:14px;font-style:italic;font-weight:400;margin:0 0 26px}
+.lb-enc{display:flex;align-items:center;gap:6px}
+.lb-enc img{width:84px;height:84px;object-fit:contain}.lb-enc::after{content:"";width:84px;flex:none}
+.lb-enc div{flex:1;text-align:center;line-height:1.3;color:#000}
+.lb-enc b{display:block;font-size:8.5px;color:#000}.lb-enc em{display:block;font-family:"Brush Script MT",cursive;font-size:13px;font-weight:700}
+.lb h2{text-align:center;font-size:15px;font-weight:700;margin:26px 0 0}.lb h3{text-align:center;font-size:15px;font-style:italic;font-weight:700;margin:0 0 24px}
 .lb p{margin:0 0 5px;line-height:1.55;white-space:nowrap}
+.lb .lb-col{display:inline-block}
+.lb .lb-lugar{white-space:normal;font-style:italic;line-height:1.6}
 .lb input{border:0;border-bottom:1px solid #000;background:transparent;font:700 10.5px Arial,Helvetica,sans-serif;color:#0b2a7a;padding:0 2px;outline:0;box-sizing:border-box}
 .lb input.lb-x{width:22px;text-align:center;cursor:pointer}
 .lb input:hover{background:rgba(255,255,170,.5)}.lb input:focus{background:rgba(255,255,140,.9)}
 .lb input.lb-falta{background:rgba(255,120,120,.3)}
-.lb input[name=lugar]{width:100%!important;font-weight:400;font-style:italic;font-size:10px;color:#000;border:0;padding:0}
-.lb-firma{display:grid;grid-template-columns:1fr 1fr;gap:56px;margin-top:40px;font-size:9.5px}
+.lb-firma{display:grid;grid-template-columns:219px 255px;column-gap:59px;margin-top:40px;font-size:9.5px}
 .lb-firma div{display:flex;flex-direction:column;justify-content:flex-end}
 .lb-firma input{width:100%;text-align:left}
-.lb-firma span{padding-top:3px}.lb-firma .lb-linea{border-top:1px solid #000}
+.lb-firma span{padding-top:3px;white-space:nowrap}.lb-firma .lb-linea{border-top:1px solid #000}
 .lb-pie{margin-top:48px;border-top:1px solid #000;padding-top:3px;text-align:center;font-size:7.5px;color:#444;line-height:1.35}
 .lb-pie em{display:block;font-family:"Brush Script MT",cursive;font-size:11px;color:#000}
-@media print{@page{size:letter;margin:12mm}.lb{zoom:1;width:100%;padding:0;box-shadow:none}.lb input{color:#000}.lb input.lb-falta{background:transparent}}
+@media print{@page{size:letter;margin:7mm 12.7mm}html,body{-webkit-print-color-adjust:exact;print-color-adjust:exact}.lb{--z:1.1!important;width:640px;height:905px;padding:0;margin:0 auto;box-shadow:none;display:flex;flex-direction:column;overflow:hidden}.lb-pie{margin-top:auto}.lb-firma{grid-template-columns:1fr 1fr;column-gap:70px}.lb input{color:#000}.lb input.lb-falta{background:transparent}}
 </style>`;
 
 function libroCampo(nombre, ancho, extra = "") {
@@ -71,15 +72,14 @@ function libroHojaHtml(anio) {
     <p>DIRECCION: ${c("direccion", "440px")}</p>
     <p>HIJO DE: ${c("padres", "450px")}</p>
     <p>MATRICULADO (A) PARA EL GRADO: ${c("grado", "150px")} AÑO ESCOLAR: ${c("anio", "60px", "readonly")}</p>
-    <p>SITUACION ACTUAL DEL ESTUDIANTE: DESPLAZADO &nbsp; SI${c("desplaz_si")} NO ${c("desplaz_no")} &nbsp;&nbsp;&nbsp;&nbsp;
-      HUERFANO &nbsp; SI${c("huerfano_si")} NO ${c("huerfano_no")}</p>
+    <p><span class="lb-col" style="width:400px">SITUACION ACTUAL DEL ESTUDIANTE: DESPLAZADO &nbsp; SI${c("desplaz_si")} NO ${c("desplaz_no")}</span>HUERFANO &nbsp; SI${c("huerfano_si")} NO ${c("huerfano_no")}</p>
     <p>NECESITA HOSPEDAJE EN EL ALBERGUE SI ${c("albergue_si")} NO ${c("albergue_no")} &nbsp;DISCAPACIDAD: &nbsp;COGNITIVA: ${c("disc_cognitiva")}</p>
     <p>SORDOMUDO ${c("disc_sordera")} &nbsp;&nbsp;&nbsp; DIFICULTAD PARA MOVERSE ${c("disc_fisica")} &nbsp;&nbsp;&nbsp; CEGUERA ${c("disc_ceguera")}</p>
     <p>No DE TELEFONO: ${c("telefono", "160px")}</p>
-    <p>ESTUDIANTE ANTIGUO ${c("est_antiguo")} &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ESTUDIANTE NUEVO ${c("est_nuevo")}</p>
+    <p><span class="lb-col" style="width:290px">ESTUDIANTE ANTIGUO ${c("est_antiguo")}</span>ESTUDIANTE NUEVO ${c("est_nuevo")}</p>
     <p>PROVIENE DEL C. EDUCATIVO: ${c("procedencia", "360px")}</p>
     <p>FECHA DE DILIGENCIAMIENTO: DIA ${c("dilig_dia", "40px")} MES ${c("dilig_mes", "100px")} AÑO ${c("dilig_anio", "50px")}</p>
-    <p style="display:flex;gap:4px;font-style:italic">LUGAR: ${c("lugar")}</p>
+    <p class="lb-lugar">LUGAR: ${LIBRO_LUGAR}</p>
     <div class="lb-firma">
       <div>${c("firma_nombre_est")}<span>NOMBRES Y APELLIDOS</span></div>
       <div><span class="lb-linea">FIRMA DEL ESTUDIANTE</span></div>
@@ -124,7 +124,6 @@ function libroValoresIniciales(e, nombreCompleto, guardado) {
     dilig_dia: String(hoy.getDate()),
     dilig_mes: (MESES_TEXTO[hoy.getMonth() + 1] || "").toUpperCase(),
     dilig_anio: String(hoy.getFullYear()),
-    lugar: LIBRO_LUGAR,
     firma_nombre_est: nombreCompleto.toUpperCase(),
     acudiente: g.acudiente || "",
     responsable: ((typeof sesionActual !== "undefined" && sesionActual?.usuario?.nombre) || "").toUpperCase(),
@@ -305,6 +304,8 @@ function imprimirLibroMatricula(hoja) {
   const w = window.open("", "_blank");
   w.document.write(`<!doctype html><meta charset="utf-8"><title>Libro de registro de matrícula</title>${LIBRO_ESTILO}<body style="margin:0">${copia.outerHTML}</body>`);
   w.document.close();
-  w.onload = () => { w.focus(); w.print(); };
-  setTimeout(() => { try { w.focus(); w.print(); } catch {} }, 700);
+  let impreso = false;
+  const imprimir = () => { if (impreso) return; impreso = true; try { w.focus(); w.print(); } catch {} };
+  w.onload = imprimir;
+  setTimeout(imprimir, 1500);
 }

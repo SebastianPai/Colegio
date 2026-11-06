@@ -5500,6 +5500,11 @@ body.anz-expo-abierta { overflow: hidden; }
 .matr-si-no { border: 1px solid var(--borde); border-radius: 8px; padding: 6px 10px 8px; margin: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; }
 .matr-si-no legend { font-size: 13px; color: var(--gris); padding: 0 4px; }
 .form-grid .matr-si-no label.check-linea { display: inline-flex; flex-direction: row; align-items: center; gap: 5px; color: var(--texto); }
+.matr-edad { font-size: 13px; color: var(--gris); }
+.matr-edad:empty { display: none; }
+.matr-edad.matr-edad-aviso { color: #92400e; }
+.matr-edad.matr-edad-error { color: #b91c1c; font-weight: 600; }
+.matr-opcional { font-size: 12px; color: var(--gris); }
 .form-grid .matr-si-no input { width: auto; margin: 0; }
 .matr-discapacidades { display: flex; flex-wrap: wrap; gap: 6px 16px; width: 100%; padding-top: 6px; }
 /* El display:flex de arriba le ganaba a [hidden]: con "No" se seguían viendo. */

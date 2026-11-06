@@ -472,7 +472,7 @@ async function guardarDatosFicha(e) {
 async function cargarHojaFicha(e) {
   const cont = document.getElementById("ficha-contenedor");
   if (!cont) return;
-  const res = await fetch("/static/ficha_matricula.html?v=f62");
+  const res = await fetch("/static/ficha_matricula.html?v=f66");
   // La hoja trae escrita la renovación 2026 → 2027; solo cambian los rótulos
   // de año, según para qué año es la ficha de este estudiante.
   const anio = e.anio_ficha_matricula || new Date().getFullYear() + 1;
@@ -554,8 +554,10 @@ function imprimirFicha() {
   const w = window.open("", "_blank");
   w.document.write(`<!doctype html><meta charset="utf-8"><title>Ficha de matrícula</title>${estilos}<body style="margin:0">${hoja.outerHTML}</body>`);
   w.document.close();
-  w.onload = () => { w.focus(); w.print(); };
-  setTimeout(() => { try { w.focus(); w.print(); } catch {} }, 700);
+  let impreso = false;
+  const imprimir = () => { if (impreso) return; impreso = true; try { w.focus(); w.print(); } catch {} };
+  w.onload = imprimir;
+  setTimeout(imprimir, 1500);
 }
 
 // "permanente" es el valor por defecto del checkbox según la categoría —

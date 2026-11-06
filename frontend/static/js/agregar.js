@@ -58,11 +58,18 @@ async function verificarDocumento() {
   const form = document.getElementById("form-nuevo-estudiante");
   form.addEventListener("submit", guardarNuevoEstudiante);
   vincularTipoDocumentoOtro("tipo_documento");
-  document.getElementById("matr-grado").addEventListener("change", actualizarCursosMatricula);
+  document.getElementById("matr-grado").addEventListener("change", () => {
+    actualizarCursosMatricula();
+    actualizarGradoAnteriorMatricula(form);
+  });
   actualizarCursosMatricula();
+  actualizarGradoAnteriorMatricula(form);
   form.querySelectorAll('input[name="anio_matricula"]').forEach((r) =>
-    r.addEventListener("change", () => actualizarAnioMatricula(form))
+    r.addEventListener("change", () => { actualizarAnioMatricula(form); actualizarEdadMatricula(form); })
   );
+  form.fecha_nacimiento.addEventListener("input", () => actualizarEdadMatricula(form));
+  form.fecha_nacimiento.addEventListener("change", () => actualizarEdadMatricula(form));
+  ["madre_nombre", "padre_nombre", "ficha_acudiente"].forEach((n) => form[n].addEventListener("input", () => validarPadresMatricula(form)));
   form.querySelectorAll('input[name="sino_huerfano"]').forEach((r) =>
     r.addEventListener("change", () => actualizarAcudienteMatricula(form))
   );
@@ -121,6 +128,14 @@ const MOTIVOS_RETIRO_FICHA = [
   [26, "Se matriculó y no asistió"], [28, "Se desconoce la causa"],
 ];
 
+// Quien entra a Preescolar no tenía grado anterior: no se pregunta.
+function actualizarGradoAnteriorMatricula(form) {
+  const caja = document.getElementById("matr-grado-anterior");
+  caja.hidden = Number(form.grado.value) === 0;
+  caja.querySelector("select").required = !caja.hidden;
+  if (caja.hidden) caja.querySelector("select").value = "";
+}
+
 // Promovido y repitente se excluyen: marcar uno en "Sí" pone el otro en "No".
 function actualizarSituacionMatricula(form, cambio) {
   const motivo = document.getElementById("matr-motivo-retiro");
@@ -133,9 +148,11 @@ function actualizarSituacionMatricula(form, cambio) {
 
 const PARENTESCOS_ACUDIENTE = ["Madre", "Padre", "Abuela", "Abuelo", "Tía", "Tío", "Hermana", "Hermano", "Madrina", "Padrino", "Otro"];
 
-// "Hijo(a) de" sobra si el acudiente es la madre o el padre (se toma su
-// nombre) o si es huérfano(a); y un huérfano no puede tener de acudiente a
-// la madre o al padre.
+// "Hijo(a) de" del libro de registro = nombre de la madre y/o del padre. Si
+// el acudiente es la madre (o el padre) su nombre se toma del acudiente y solo
+// se pregunta el del otro (opcional). Si el acudiente es otra persona (abuela,
+// tío...), se escribe al menos uno de los dos. Huérfano(a): no se pregunta, y
+// no puede tener de acudiente a la madre o al padre.
 function actualizarAcudienteMatricula(form) {
   const huerfano = form.sino_huerfano.value === "si";
   const select = form.parentesco_opcion;
@@ -144,9 +161,71 @@ function actualizarAcudienteMatricula(form) {
   const otro = document.getElementById("matr-parentesco-otro");
   otro.hidden = select.value !== "Otro";
   otro.querySelector("input").required = !otro.hidden;
-  const padres = document.getElementById("matr-padres");
-  padres.hidden = huerfano || ["Madre", "Padre"].includes(select.value);
-  padres.querySelector("input").required = !padres.hidden;
+  const madre = document.getElementById("matr-madre");
+  const padre = document.getElementById("matr-padre");
+  madre.hidden = huerfano || select.value === "Madre";
+  padre.hidden = huerfano || select.value === "Padre";
+  const esPadreOMadre = ["Madre", "Padre"].includes(select.value);
+  madre.querySelector(".matr-opcional").textContent = esPadreOMadre ? "(opcional)" : "";
+  padre.querySelector(".matr-opcional").textContent = esPadreOMadre ? "(opcional)" : "";
+  validarPadresMatricula(form);
+}
+
+// Acudiente que no es la madre ni el padre: al menos uno de los dos nombres.
+function validarPadresMatricula(form) {
+  const falta = form.sino_huerfano.value !== "si" && !["Madre", "Padre"].includes(form.parentesco_opcion.value) &&
+    !form.madre_nombre.value.trim() && !form.padre_nombre.value.trim();
+  form.madre_nombre.setCustomValidity(falta ? "Escriba el nombre de la madre o del padre (sale en el libro como «Hijo(a) de»)." : "");
+}
+
+// Fecha en que cumple `anios` (29 de febrero → 1 de marzo en años no bisiestos).
+function fechaCumpleAnios(nac, anios) {
+  const f = new Date(nac.getFullYear() + anios, nac.getMonth(), nac.getDate());
+  return f;
+}
+
+function edadEnAnios(nac, en) {
+  let edad = en.getFullYear() - nac.getFullYear();
+  if (en.getMonth() < nac.getMonth() || (en.getMonth() === nac.getMonth() && en.getDate() < nac.getDate())) edad--;
+  return edad;
+}
+
+// Edad al escribir la fecha de nacimiento. Edad mínima: 5 años, o cumplirlos
+// a más tardar el 30 de junio del año escolar de la matrícula; más pequeño(a)
+// no se puede matricular (el servidor lo vuelve a verificar).
+function actualizarEdadMatricula(form) {
+  const caja = document.getElementById("matr-edad");
+  const input = form.fecha_nacimiento;
+  input.setCustomValidity("");
+  caja.className = "matr-edad";
+  if (!input.value) { caja.textContent = ""; return; }
+  const nac = new Date(`${input.value}T00:00:00`);
+  const hoy = new Date(`${fechaColombiaISO()}T00:00:00`);
+  if (nac > hoy) {
+    caja.textContent = "La fecha de nacimiento no puede ser en el futuro.";
+    caja.classList.add("matr-edad-error");
+    input.setCustomValidity(caja.textContent);
+    return;
+  }
+  const edad = edadEnAnios(nac, hoy);
+  let texto = `Edad: ${edad} año${edad === 1 ? "" : "s"}.`;
+  if (edad < 5) {
+    const cumple5 = fechaCumpleAnios(nac, 5);
+    const cuando = cumple5.toLocaleDateString("es-CO", { day: "numeric", month: "long", year: "numeric" });
+    const anio = Number(form.anio_matricula.value) || null;
+    if (!anio) {
+      texto += ` Cumple 5 el ${cuando}. Escoja el año de la matrícula para verificar si alcanza (límite: 30 de junio).`;
+      caja.classList.add("matr-edad-aviso");
+    } else if (cumple5 > new Date(anio, 5, 30)) {
+      texto += ` Cumple 5 el ${cuando}: es muy pequeño(a) para ${anio}. Debe cumplir 5 años a más tardar el 30 de junio de ${anio}.`;
+      caja.classList.add("matr-edad-error");
+      input.setCustomValidity(texto);
+    } else {
+      texto += ` Cumple 5 el ${cuando}: sí alcanza (límite 30 de junio de ${anio}).`;
+      caja.classList.add("matr-edad-aviso");
+    }
+  }
+  caja.textContent = texto;
 }
 
 function formularioNuevoEstudiante(documento, sedes) {
@@ -180,7 +259,8 @@ function formularioNuevoEstudiante(documento, sedes) {
           <label>Segundo nombre <input type="text" name="segundo_nombre" /></label>
           <label>Primer apellido <input type="text" name="primer_apellido" required /></label>
           <label>Segundo apellido <input type="text" name="segundo_apellido" /></label>
-          <label>Fecha de nacimiento <input type="date" name="fecha_nacimiento" required /></label>
+          <label>Fecha de nacimiento <input type="date" name="fecha_nacimiento" required />
+            <span id="matr-edad" class="matr-edad" aria-live="polite"></span></label>
           <label>Municipio de nacimiento <input type="text" name="ficha_municipio_nacimiento" required /></label>
           <label>Género
             <select name="genero" required>
@@ -217,7 +297,7 @@ function formularioNuevoEstudiante(documento, sedes) {
       <section class="matr-seccion">
         <h3>Situación académica</h3>
         <div class="form-grid">
-          <label class="ancho-completo"><span id="matr-grado-anterior-texto">¿En qué grado estuvo el año anterior?</span>
+          <label class="ancho-completo" id="matr-grado-anterior"><span id="matr-grado-anterior-texto">¿En qué grado estuvo el año anterior?</span>
             <select name="grado_anterior" required>
               <option value="">Escoja...</option>
               ${NOMBRES_GRADOS.map(([g, nombre]) => `<option value="${g}">${nombre}</option>`).join("")}
@@ -291,7 +371,8 @@ function formularioNuevoEstudiante(documento, sedes) {
           </label>
           <label id="matr-parentesco-otro" hidden>¿Cuál parentesco? <input type="text" name="parentesco_otro" /></label>
           <label>Documento del acudiente <input type="text" name="ficha_documento_acudiente" required /></label>
-          <label id="matr-padres">Hijo(a) de (nombres de la madre y del padre) <input type="text" name="ficha_padres" required placeholder="Ej: María García y Edgar Beltrán" /></label>
+          <label id="matr-madre">Nombre de la madre <span class="matr-opcional"></span> <input type="text" name="madre_nombre" placeholder="Para «Hijo(a) de» del libro" /></label>
+          <label id="matr-padre">Nombre del padre <span class="matr-opcional"></span> <input type="text" name="padre_nombre" placeholder="Para «Hijo(a) de» del libro" /></label>
           <label>Teléfono <input type="tel" name="ficha_telefono" /></label>
           <fieldset class="matr-si-no">
             <legend>¿Necesita hospedaje en el albergue?</legend>
@@ -373,8 +454,14 @@ function datosMatriculaNueva(form) {
     if (k.startsWith("ficha_") && String(v).trim()) campos[k.slice(6)] = String(v).trim();
   });
   campos.parentesco = d.parentesco_opcion === "Otro" ? (d.parentesco_otro || "").trim() : d.parentesco_opcion;
-  if (d.sino_huerfano === "si") delete campos.padres;
-  else if (["Madre", "Padre"].includes(d.parentesco_opcion)) campos.padres = (d.ficha_acudiente || "").trim();
+  // "Hijo(a) de": madre y padre (el que es acudiente se toma del acudiente).
+  if (d.sino_huerfano !== "si") {
+    const acudiente = (d.ficha_acudiente || "").trim();
+    const madre = d.parentesco_opcion === "Madre" ? acudiente : (d.madre_nombre || "").trim();
+    const padre = d.parentesco_opcion === "Padre" ? acudiente : (d.padre_nombre || "").trim();
+    const padres = [madre, padre].filter(Boolean).join(" y ");
+    if (padres) campos.padres = padres;
+  }
   if (d.ficha_sgp) campos.sgp = "X";
   if (d.etnia) campos[d.etnia] = "X";
   SI_NO_FICHA.forEach(([clave]) => {
@@ -393,7 +480,8 @@ function datosMatriculaNueva(form) {
   }
   if (d.fecha_ingreso) {
     const [anio, mes, dia] = d.fecha_ingreso.split("-");
-    Object.assign(campos, { ingreso_dia: String(Number(dia)), ingreso_mes: MESES_FICHA[Number(mes) - 1], ingreso_anio: anio });
+    // Mes abreviado (NOV): el mes completo no cabe en la casilla de la ficha.
+    Object.assign(campos, { ingreso_dia: String(Number(dia)), ingreso_mes: MESES_FICHA[Number(mes) - 1].slice(0, 3), ingreso_anio: anio });
   }
   return { estudiante, campos_ficha: campos, anio_matricula: Number(d.anio_matricula) };
 }

@@ -185,6 +185,15 @@ function valoresInicialesFicha(e) {
     ...(e.matricula_nueva_este_anio
       ? { grado_2026: String(e.grado), est_nuevo: "X" }
       : { grado_2025: String(e.grado), est_antiguo: "X" }),
+    // Nuevo: la fecha de ingreso es hoy (si ya hay una guardada, esa manda).
+    // Mes abreviado (NOV): el mes completo no cabe en la casilla de la ficha.
+    ...(e.matricula_nueva_este_anio
+      ? {
+          ingreso_dia: String(hoy.getDate()),
+          ingreso_mes: (MESES_TEXTO[hoy.getMonth() + 1] || "").toUpperCase().slice(0, 3),
+          ingreso_anio: String(hoy.getFullYear()),
+        }
+      : {}),
     docente: (typeof sesionActual !== "undefined" && sesionActual?.usuario?.nombre) || "",
     dilig_dia: String(hoy.getDate()),
     dilig_mes: (MESES_TEXTO[hoy.getMonth() + 1] || "").toUpperCase(),

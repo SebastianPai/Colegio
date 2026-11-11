@@ -212,6 +212,29 @@ permisos llegan en la fase siguiente.
 - Pruebas: `./venv/Scripts/python.exe probar_autenticacion.py` (trabaja sobre
   una copia temporal; no toca `colegio.db`).
 
+## Censo indígena (resguardo El Gran Sábalo)
+
+El censo del Ministerio del Interior (Excel `CENSO MININTERIOR GRAN SABALO`,
+hoja `FORMATO_CENSOS`) se carga con:
+
+```powershell
+cd backend
+./venv/Scripts/python.exe importar_censo.py "C:/ruta/CENSO MININTERIOR GRAN SABALO.xlsx"
+./venv/Scripts/python.exe importar_censo.py --revincular   # tras matricular estudiantes nuevos
+```
+
+Cada carga reemplaza el censo de ese resguardo (las hojas de fallecidos y
+retiro voluntario no se cargan). Los estudiantes se unen por documento; si no
+coincide, por nombre completo único (se marcan «Verificar: solo nombre»).
+
+- **Reportes → Censo Gran Sábalo**: cuántos estudiantes son del resguardo
+  (hombres/mujeres, % del colegio), por edad, grado, comunidad y sede; los de
+  5–17 años del censo que no están en el colegio; lista buscable con descarga
+  a Excel (CSV) e impresión.
+- **Perfil del estudiante**: insignia «Censo El Gran Sábalo» en la cabecera y,
+  en la pestaña Datos, el bloque «Censo del resguardo» (comunidad, familia,
+  parentesco y núcleo familiar, marcando quiénes estudian aquí).
+
 ## Pendiente (próximas fases)
 
 - Confirmar con el colegio el manejo de estudiantes retirados/trasladados.

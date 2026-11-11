@@ -12,6 +12,7 @@ from .routers import (
     alertas,
     asistencia,
     auth,
+    censo,
     certificados,
     diagnostico,
     docente,
@@ -53,6 +54,7 @@ app.include_router(academico.router)
 app.include_router(horario.router)
 app.include_router(reportes.router)
 app.include_router(icfes.router)
+app.include_router(censo.router)
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
 

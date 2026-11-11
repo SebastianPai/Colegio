@@ -1425,6 +1425,14 @@ function panelDatosHtml(e) {
         <p class="est-bloque-desc">Acudiente, comunidad, etnia, discapacidad… Son de solo lectura aquí: se escriben en la ficha oficial.</p>
         <div id="datos-matricula-guardados"></div>
       </section>
+
+      <section class="est-bloque est-bloque-ancho">
+        <header class="est-bloque-head">
+          <h3>Censo del resguardo</h3>
+        </header>
+        <p class="est-bloque-desc">Lo que dice el censo indígena del Ministerio del Interior: comunidad, familia y quiénes de su familia estudian aquí.</p>
+        <div id="censo-estudiante"><p class="estado-carga">Cargando...</p></div>
+      </section>
     </div>`;
 }
 
@@ -1859,6 +1867,7 @@ async function renderFicha() {
               <span class="badge ${e.activo ? "activo" : "inactivo"}">${esc((e.estado || "").toLowerCase())}</span>
               ${e.pendiente_simat ? '<span class="est-chip pendiente"><i data-lucide=triangle-alert class=ico></i> Nuevo · pendiente SIMAT</span>' : ""}
               <span class="est-chip neutro"><i data-lucide=calendar-days class=ico></i> Año lectivo ${docs.anio}</span>
+              <span class="est-chip ok" id="chip-censo-estudiante" hidden></span>
               ${docs.faltantes.length ? `<span class="est-chip pendiente">${docs.faltantes.length} documento${docs.faltantes.length > 1 ? "s" : ""} pendiente${docs.faltantes.length > 1 ? "s" : ""}</span>` : '<span class="est-chip ok">Documentación completa</span>'}
             </p>
           </div>
@@ -1916,6 +1925,7 @@ async function renderFicha() {
   vincularEstadoPreviews();
   vincularBloqueoFicha();
   pintarDatosMatriculaGuardados(e);
+  pintarCensoEstudiante(e);
   // El director de grupo ve "Datos" en solo lectura: no edita identidad,
   // grado/curso ni observaciones internas desde el módulo docente — eso
   // sigue siendo de Administración/Secretaría. Lo único editable para él es

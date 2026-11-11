@@ -9,6 +9,7 @@ const SECCIONES_REPORTES = [
   { id: "lista", label: "Lista de estudiantes" },
   { id: "asistencia", label: "Listas de asistencia" },
   { id: "docentes", label: "Lista de docentes" },
+  { id: "censo", label: "Censo Gran Sábalo" },
   { id: "conciliacion", label: "Conciliación SIMAC <i data-lucide=arrow-left-right class=ico></i> SAPRED" },
 ];
 
@@ -38,6 +39,7 @@ async function renderReportes() {
   if (seccionReportes === "lista") return renderSeccionListaCupo();
   if (seccionReportes === "asistencia") return renderSeccionListasAsistencia();
   if (seccionReportes === "docentes") return renderSeccionListaDocentes();
+  if (seccionReportes === "censo") return renderSeccionCenso();
   return renderSeccionResumenInstitucional();
 }
 

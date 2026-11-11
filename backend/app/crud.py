@@ -2,7 +2,7 @@ import re
 import datetime as dt
 import json
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from . import conciliacion, fechas, models, schemas
@@ -328,6 +328,10 @@ def eliminar_estudiante(db: Session, estudiante_id: int) -> bool:
     # Los datos de la ficha (los que pide la matrícula) son solo de este
     # estudiante: se van con él. Sin esto nadie recién matriculado se podía borrar.
     db.execute(delete(models.DatosFichaEstudiante).where(models.DatosFichaEstudiante.estudiante_id == estudiante_id))
+    # Su fila del censo indígena es de la comunidad, no del colegio: se queda,
+    # solo pierde el vínculo con el estudiante.
+    db.execute(update(models.PersonaCenso).where(models.PersonaCenso.estudiante_id == estudiante_id)
+               .values(estudiante_id=None, vinculo=None))
     db.delete(db_estudiante)
     try:
         db.commit()

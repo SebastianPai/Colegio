@@ -1600,3 +1600,48 @@ class OperacionCliente(Base):
     tipo_contenido: Mapped[str | None] = mapped_column(String(100), nullable=True)
     cuerpo: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     creado: Mapped[dt.datetime] = mapped_column(DateTime, default=fechas.ahora_utc, index=True)
+
+
+class PersonaCenso(Base):
+    """Una persona del censo indígena del Ministerio del Interior de un
+    resguardo (hoy: El Gran Sábalo, hoja FORMATO_CENSOS del Excel oficial).
+    Lo carga backend/importar_censo.py; cada importación REEMPLAZA el censo de
+    ese resguardo (el Excel es la fuente de verdad, no se edita aquí).
+
+    El vínculo con `estudiantes` es por número de documento; si no aparece,
+    por nombre completo (sin tildes) y solo cuando hay UNA coincidencia
+    (vinculo = "nombre": conviene verificarlo). Ver app/censo.py."""
+
+    __tablename__ = "censo_personas"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    resguardo: Mapped[str] = mapped_column(String(150), index=True)
+    vigencia: Mapped[int | None] = mapped_column(nullable=True)
+    comunidad: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    familia: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    numero_vivienda: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    documento: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    tipo_documento: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    primer_nombre: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    segundo_nombre: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    primer_apellido: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    segundo_apellido: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    parentesco: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    sexo: Mapped[str | None] = mapped_column(String(5), nullable=True)  # M / F
+    fecha_nacimiento: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    escolaridad: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    estado_civil: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    telefono: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+    estudiante_id: Mapped[int | None] = mapped_column(
+        ForeignKey("estudiantes.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    vinculo: Mapped[str | None] = mapped_column(String(20), nullable=True)  # documento | nombre
+    importado_en: Mapped[dt.datetime] = mapped_column(DateTime, default=fechas.ahora_utc)
+
+    estudiante: Mapped["Estudiante | None"] = relationship()
+
+    @property
+    def nombre_completo(self) -> str:
+        partes = [self.primer_nombre, self.segundo_nombre, self.primer_apellido, self.segundo_apellido]
+        return " ".join(p for p in partes if p)
